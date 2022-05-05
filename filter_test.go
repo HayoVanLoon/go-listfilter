@@ -113,6 +113,13 @@ func Test_filterParser_Parse(t *testing.T) {
 			nil,
 		},
 		{
+			"operator as value",
+			standardFields,
+			args{s: "foo=="},
+			&filter{conds: map[string][]Condition{"foo": {{"foo", []string{"foo"}, "=", "="}}}},
+			nil,
+		},
+		{
 			"! unknown operator",
 			standardFields,
 			args{s: "foo*bar"},
@@ -156,6 +163,24 @@ func Test_filterParser_Parse(t *testing.T) {
 			nil,
 		},
 		{
+			"quoted value",
+			standardFields,
+			args{s: "foo=\"say \\\"bar\\\"\""},
+			&filter{conds: map[string][]Condition{
+				"foo": {{"foo", []string{"foo"}, "=", "say \"bar\""}}},
+			},
+			nil,
+		},
+		{
+			"quoted value with escaped escape character",
+			standardFields,
+			args{s: "foo=\"say\\\\ \\n \\\"bar\\\"\""},
+			&filter{conds: map[string][]Condition{
+				"foo": {{"foo", []string{"foo"}, "=", "say\\ \\n \"bar\""}}},
+			},
+			nil,
+		},
+		{
 			"! name only",
 			standardFields,
 			args{s: "foo"},
@@ -177,18 +202,11 @@ func Test_filterParser_Parse(t *testing.T) {
 			&ParseError{"expected operator", 11, ""},
 		},
 		{
-			"! operator in value",
+			"! unterminated quoted value",
 			standardFields,
-			args{s: "foo=ba=r"},
+			args{s: "foo=\"bar"},
 			nil,
-			&ParseError{"operator found in value", 7, "ba="},
-		},
-		{
-			"! only operator in value",
-			standardFields,
-			args{s: "foo=="},
-			nil,
-			&ParseError{"operator found in value", 5, "="},
+			&ParseError{"unterminated quoted value", 4, "\"bar"},
 		},
 	}
 	for _, tt := range tests {

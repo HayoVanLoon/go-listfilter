@@ -4,6 +4,25 @@
 
 A library for parsing filter expressions as found in list and search web calls.
 
+The string should adher to the following grammar:
+```text
+Filter ->           <nil> | conditions
+conditions ->       Condition | Condition separator Conditions
+separator ->        ,
+Condition ->        fullName operator value
+fullName ->         nameParts
+nameParts ->        name | name nameSeparator nameParts
+nameSeparator ->    .
+name ->             regex([a-zA-Z][a-zA-Z0-9_]*)
+operator ->         regex([^a-zA-Z0-9_].*)
+value ->            normalValue | quotedValue
+normalValue ->      regex([^separator]*)
+quotedValue ->      " escaped "
+escaped ->          <nil> | nChar escaped | eChar escaped
+eChar ->            \\ | \"
+nChar ->            <not eChar>
+```
+
 # License
 
 Copyright 2022 Hayo van Loon

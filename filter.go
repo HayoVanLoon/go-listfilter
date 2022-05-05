@@ -16,16 +16,21 @@ type FilterParser interface {
 	//
 	// The string should adher to the following grammar:
 	//
-	// Filter -> [Conditions]
-	// Conditions -> Condition | Condition separator Conditions
-	// separator -> ","
-	// Condition -> fullName operator value
-	// fullName -> nameParts
-	// nameParts -> name | name nameSeparator nameParts
-	// nameSeparator -> "."
-	// name -> [a-zA-Z][a-zA-Z0-9_]*
-	// operator -> [^a-zA-Z0-9_]+
-	// value -> "([^"]|(\\"))*" | ([^"=][^=]*)?
+	// Filter -> 		<nil> | Conditions
+	// conditions ->	condition | Condition separator Conditions
+	// separator ->  	,
+	// Condition ->  	fullName operator value
+	// fullName ->		nameParts
+	// nameParts ->  	name | name nameSeparator nameParts
+	// nameSeparator -> .
+	// name -> 			regex([a-zA-Z][a-zA-Z0-9_]*)
+	// operator -> 		regex([^a-zA-Z0-9_].*)
+	// value -> 		normalValue | quotedValue
+	// normalValue ->	regex([^separator]*)
+	// quotedValue ->	" escaped "
+	// escaped ->		<nil> | nChar escaped | eChar escaped
+	// eChar ->			\\ | \"
+	// nChar ->			<not eChar>
 	Parse(s string) (Filter, error)
 }
 
@@ -87,8 +92,10 @@ func (p *filterParser) Parse(s string) (Filter, error) {
 }
 
 const (
-	separator     = ','
-	nameSeparator = '.'
+	separator       = ','
+	nameSeparator   = '.'
+	escapeCharacter = '\\'
+	quote           = '"'
 )
 
 func (p *filterParser) parseConditions(s string, start int) (map[string][]Condition, int, error) {
@@ -189,15 +196,56 @@ func (p *filterParser) parseOperator(s string, start int) (string, int, error) {
 }
 
 func (p *filterParser) parseValue(s string, start int) (string, int, error) {
+	if start == len(s) {
+		return "", start, nil
+	}
+	if s[start] == quote {
+		return parseQuotedValue(s, start)
+	}
+	return parseNormalValue(s, start)
+}
+
+func parseNormalValue(s string, start int) (string, int, error) {
+	// normalValue ->	regex([^separator]*)
+	i := strings.IndexByte(s[start:], separator)
+	if i == -1 {
+		return s[start:], len(s), nil
+	}
+	return s[start : start+i], start + i, nil
+}
+
+func parseQuotedValue(s string, start int) (string, int, error) {
+	i := start + 1
+	v, i, err := parseQuotesEscaped(s, i)
+	if err != nil {
+		return v, i, err
+	}
+	if len(s) <= i || s[i] != quote {
+		return "", start, &ParseError{"unterminated quoted value", start, s[start:i]}
+	}
+	return v, i, err
+}
+
+func parseQuotesEscaped(s string, start int) (string, int, error) {
+	sb := strings.Builder{}
 	i := start
-	// TODO(hvl): optimise
-	for ; i < len(s) && s[i] != separator; i += 1 {
-	}
-	v := s[start:i]
-	for k := range p.ops {
-		if j := strings.Index(v, k); j >= 0 {
-			return "", j, &ParseError{"operator found in value", start + j + len(k), v[:j+len(k)]}
+	escape := false
+	for ; i < len(s); i += 1 {
+		if escape {
+			switch s[i] {
+			case quote, escapeCharacter:
+			default:
+				// no special meaning, add escape character retroactively
+				sb.WriteRune(escapeCharacter)
+			}
+			escape = false
+		} else if s[i] == quote {
+			break
+		} else if s[i] == escapeCharacter {
+			escape = true
+			continue
 		}
+		sb.WriteByte(s[i])
 	}
-	return v, i, nil
+	return sb.String(), i, nil
 }
