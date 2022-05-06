@@ -7,6 +7,7 @@ package listfilter
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -41,11 +42,59 @@ type Filter interface {
 	Size() int
 }
 
-type Condition struct {
-	Key         string
-	KeyParts    []string
-	Op          string
-	StringValue string
+type Condition interface {
+	Key() string
+	KeyParts() []string
+	Op() string
+	StringValue() string
+	IntValue() (int, error)
+	BoolValue() (bool, error)
+	FloatValue() (float64, error)
+}
+
+type condition struct {
+	key         string
+	keyParts    []string
+	op          string
+	stringValue string
+}
+
+func NewCondition(key string, keyParts []string, op, stringValue string) Condition {
+	return condition{key, keyParts, op, stringValue}
+}
+
+func (c condition) Key() string {
+	return c.key
+}
+
+func (c condition) KeyParts() []string {
+	return c.keyParts
+}
+
+func (c condition) Op() string {
+	return c.op
+}
+
+func (c condition) StringValue() string {
+	return c.stringValue
+}
+
+func (c condition) IntValue() (int, error) {
+	return strconv.Atoi(c.stringValue)
+}
+
+func (c condition) BoolValue() (bool, error) {
+	switch strings.ToLower(c.stringValue) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("not a valid boolean: %s", c.stringValue)
+}
+
+func (c condition) FloatValue() (float64, error) {
+	return strconv.ParseFloat(c.stringValue, 64)
 }
 
 type ParseError struct {
@@ -103,37 +152,37 @@ func (p *filterParser) parseConditions(s string, start int) (map[string][]Condit
 	if err != nil {
 		return nil, i, err
 	}
-	m := map[string][]Condition{cond.Key: {cond}}
+	m := map[string][]Condition{cond.key: {cond}}
 	for i < len(s) && s[i] == separator {
 		i += 1
 		cond, i, err = p.parseCondition(s, i)
 		if err != nil {
 			return nil, i, err
 		}
-		xs := m[cond.Key]
+		xs := m[cond.key]
 		if xs == nil {
-			m[cond.Key] = []Condition{cond}
+			m[cond.key] = []Condition{cond}
 		} else {
-			m[cond.Key] = append(xs, cond)
+			m[cond.key] = append(xs, cond)
 		}
 	}
 	return m, start, nil
 }
 
-func (p *filterParser) parseCondition(s string, start int) (Condition, int, error) {
+func (p *filterParser) parseCondition(s string, start int) (condition, int, error) {
 	keyParts, i, err := p.parseNameParts(s, start)
 	if err != nil {
-		return Condition{}, i, err
+		return condition{}, i, err
 	}
 	op, i, err := p.parseOperator(s, i)
 	if err != nil {
-		return Condition{}, i, err
+		return condition{}, i, err
 	}
 	value, i, err := p.parseValue(s, i)
 	if err != nil {
-		return Condition{}, i, err
+		return condition{}, i, err
 	}
-	return Condition{strings.Join(keyParts, string(nameSeparator)), keyParts, op, value}, i, nil
+	return condition{strings.Join(keyParts, string(nameSeparator)), keyParts, op, value}, i, nil
 }
 
 func (p *filterParser) parseFullName(s string, start int) (string, int, error) {

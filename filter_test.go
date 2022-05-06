@@ -83,7 +83,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar"},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", "bar"}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")}},
 			},
 			nil,
 		},
@@ -99,7 +99,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo.bar.bla=vla"},
 			&filter{conds: map[string][]Condition{
-				"foo.bar.bla": {{"foo.bar.bla", []string{"foo", "bar", "bla"}, "=", "vla"}}},
+				"foo.bar.bla": {NewCondition("foo.bar.bla", []string{"foo", "bar", "bla"}, "=", "vla")}},
 			},
 			nil,
 		},
@@ -108,7 +108,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo!=bar"},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "!=", "bar"}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "!=", "bar")}},
 			},
 			nil,
 		},
@@ -116,7 +116,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			"operator as value",
 			standardFields,
 			args{s: "foo=="},
-			&filter{conds: map[string][]Condition{"foo": {{"foo", []string{"foo"}, "=", "="}}}},
+			&filter{conds: map[string][]Condition{"foo": {NewCondition("foo", []string{"foo"}, "=", "=")}}},
 			nil,
 		},
 		{
@@ -131,9 +131,9 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar,bla=vla,moo=boo"},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", "bar"}},
-				"bla": {{"bla", []string{"bla"}, "=", "vla"}},
-				"moo": {{"moo", []string{"moo"}, "=", "boo"}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
+				"bla": {NewCondition("bla", []string{"bla"}, "=", "vla")},
+				"moo": {NewCondition("moo", []string{"moo"}, "=", "boo")},
 			}},
 			nil,
 		},
@@ -149,7 +149,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar"},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", "bar"}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")}},
 			},
 			nil,
 		},
@@ -158,7 +158,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo="},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", ""}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "")}},
 			},
 			nil,
 		},
@@ -167,7 +167,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=\"say \\\"bar\\\"\""},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", "say \"bar\""}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "say \"bar\"")}},
 			},
 			nil,
 		},
@@ -176,7 +176,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=\"say\\\\ \\n \\\"bar\\\"\""},
 			&filter{conds: map[string][]Condition{
-				"foo": {{"foo", []string{"foo"}, "=", "say\\ \\n \"bar\""}}},
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "say\\ \\n \"bar\"")}},
 			},
 			nil,
 		},
@@ -227,5 +227,21 @@ func Test_filterParser_Parse(t *testing.T) {
 				t.Errorf("Parse() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func BenchmarkFilterParser_Parse(b *testing.B) {
+	p := NewParser()
+	type args struct {
+		s string
+	}
+	cases := []struct {
+		args args
+	}{}
+
+	for i := 0; i < b.N; i += 1 {
+		for _, c := range cases {
+			_, _ = p.Parse(c.args.s)
+		}
 	}
 }
