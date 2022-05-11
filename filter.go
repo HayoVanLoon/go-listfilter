@@ -18,6 +18,7 @@ type FilterParser interface {
 	Parse(s string) (Filter, ParseError)
 }
 
+// Condition stores a filter condition.
 type Condition interface {
 	Key() string
 	KeyParts() []string
@@ -35,30 +36,44 @@ type condition struct {
 	stringValue string
 }
 
+// NewCondition creates a new Condition from the specified parameters.
 func NewCondition(key string, keyParts []string, op, stringValue string) Condition {
 	return condition{key, keyParts, op, stringValue}
 }
 
+// Key returns the condition's key.
 func (c condition) Key() string {
 	return c.key
 }
 
+// KeyParts returns the condition's key part list, which has at least one item.
 func (c condition) KeyParts() []string {
 	return c.keyParts
 }
 
+// Op returns the condition's operator as a string.
 func (c condition) Op() string {
 	return c.op
 }
 
+// StringValue returns the raw string value of the condition.
 func (c condition) StringValue() string {
 	return c.stringValue
 }
 
+// IntValue is a convenience function for getting a filter condition value as an
+// integer. If the value is not an integer, an error is returned.
 func (c condition) IntValue() (int, error) {
-	return strconv.Atoi(c.stringValue)
+	i, err := strconv.Atoi(c.stringValue)
+	if err != nil {
+		return 0, fmt.Errorf("%s is not an integer", c.stringValue)
+	}
+	return i, nil
 }
 
+// BoolValue is a convenience function for getting a filter condition value as
+// a boolean. If the value is not a strict boolean (case-insensitive 'true' or
+// 'false'), an error is returned.
 func (c condition) BoolValue() (bool, error) {
 	switch strings.ToLower(c.stringValue) {
 	case "true":
@@ -66,11 +81,17 @@ func (c condition) BoolValue() (bool, error) {
 	case "false":
 		return false, nil
 	}
-	return false, fmt.Errorf("not a valid boolean: %s", c.stringValue)
+	return false, fmt.Errorf("%s is not a valid boolean", c.stringValue)
 }
 
+// FloatValue is a convenience function for getting a filter condition value as
+// a 64-bit float. If the value is not a float, an error is returned.
 func (c condition) FloatValue() (float64, error) {
-	return strconv.ParseFloat(c.stringValue, 64)
+	f, err := strconv.ParseFloat(c.stringValue, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s is not a valid float", c.stringValue)
+	}
+	return f, nil
 }
 
 // A ParseError describes the error that occurred while parsing. In addition, it
@@ -88,18 +109,22 @@ type parseError struct {
 	unparsable string
 }
 
+// NewParseError returns a new ParseError with the specified parameters.
 func NewParseError(message string, position int, text string) ParseError {
 	return &parseError{message, position, text}
 }
 
+// Message provides a user-friendly error message.
 func (pe *parseError) Message() string {
 	return pe.message
 }
 
+// Position returns the position in the string at which parsing failed.
 func (pe *parseError) Position() int {
 	return pe.position
 }
 
+// Unparsable returns the part of the string from which parsing failed.
 func (pe *parseError) Unparsable() string {
 	return pe.unparsable
 }
