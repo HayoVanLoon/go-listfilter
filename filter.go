@@ -12,34 +12,10 @@ import (
 	"unicode"
 )
 
+// A FilterParser parses a filter string into a Filter. If parsing fails, a
+// ParseError is returned and the Filter will be nil.
 type FilterParser interface {
-	// Parse a string into a Filter or return a ParseError.
-	//
-	// The string should adher to the following grammar:
-	//
-	// Filter -> 		<nil> | Conditions
-	// conditions ->	condition | Condition separator Conditions
-	// separator ->  	,
-	// Condition ->  	fullName operator value
-	// fullName ->		nameParts
-	// nameParts ->  	name | name nameSeparator nameParts
-	// nameSeparator -> .
-	// name -> 			regex([a-zA-Z][a-zA-Z0-9_]*)
-	// operator -> 		regex([^a-zA-Z0-9_].*)
-	// value -> 		normalValue | quotedValue
-	// normalValue ->	regex([^separator]*)
-	// quotedValue ->	" escaped "
-	// escaped ->		<nil> | nChar escaped | eChar escaped
-	// eChar ->			\\ | \"
-	// nChar ->			<not eChar>
-	Parse(s string) (Filter, error)
-}
-
-type Filter interface {
-	// Get conditions by key.
-	Get(k string) ([]Condition, bool)
-	// Size returns the number of conditions in the filter.
-	Size() int
+	Parse(s string) (Filter, ParseError)
 }
 
 type Condition interface {
@@ -97,47 +73,109 @@ func (c condition) FloatValue() (float64, error) {
 	return strconv.ParseFloat(c.stringValue, 64)
 }
 
-type ParseError struct {
-	Message  string
-	Position int
-	Text     string
+// A ParseError describes the error that occurred while parsing. In addition, it
+// provides details to help pinpoint the error.
+type ParseError interface {
+	error
+	Message() string
+	Position() int
+	Unparsable() string
 }
 
-func (pe *ParseError) Error() string {
-	return fmt.Sprintf("%s @ %d (%s)", pe.Message, pe.Position, pe.Text)
+type parseError struct {
+	message    string
+	position   int
+	unparsable string
 }
 
-type filter struct {
-	conds map[string][]Condition
+func NewParseError(message string, position int, text string) ParseError {
+	return &parseError{message, position, text}
 }
 
-func (f *filter) Get(k string) ([]Condition, bool) {
-	cs, ok := f.conds[k]
-	return cs, ok
+func (pe *parseError) Message() string {
+	return pe.message
 }
 
-func (f *filter) Size() int {
-	return len(f.conds)
+func (pe *parseError) Position() int {
+	return pe.position
+}
+
+func (pe *parseError) Unparsable() string {
+	return pe.unparsable
+}
+
+func (pe *parseError) Error() string {
+	return fmt.Sprintf("%s @ %d (%s)", pe.message, pe.position, pe.unparsable)
+}
+
+type Filter map[string][]Condition
+
+// GetFirst retrieves the first condition for a given key.
+func (f Filter) GetFirst(k string) (Condition, bool) {
+	cs := f[k]
+	// empty lists can exist, go beyond nil check
+	if len(cs) > 0 {
+		return cs[0], true
+	}
+	return nil, false
+}
+
+// GetLast retrieves the last condition for a given key.
+func (f Filter) GetLast(k string) (Condition, bool) {
+	cs := f[k]
+	// empty lists can exist, go beyond nil check
+	if l := len(cs); l > 0 {
+		return cs[l-1], true
+	}
+	return nil, false
 }
 
 type filterParser struct {
 	ops map[string]bool
 }
 
-// NewParser creates a new parser.
+// NewParser creates a new FilterParser.
 func NewParser() FilterParser {
 	return &filterParser{ops: map[string]bool{"=": true, "!=": true}}
 }
 
-func (p *filterParser) Parse(s string) (Filter, error) {
+// Parse parses a filter string into a Filter.
+//
+// Examples of filter strings:
+//
+//   "foo=bar"
+//   "foo.bar=bla"
+//   "foo=bar,bla=vla"
+//
+// The filter string should adher to the following grammar:
+//
+//   Filter ->        <nil> | Conditions
+//   Conditions ->    Condition | Condition Separator Conditions
+//   Separator ->     ,
+//   Condition ->     FullName Operator Value
+//   FullName ->      NameParts
+//   NameParts ->     Name | Name NameSeparator NameParts
+//   NameSeparator -> .
+//   Name ->          regex([a-zA-Z][a-zA-Z0-9_]*)
+//   Operator ->      regex([^a-zA-Z0-9_].*)
+//   Value ->         NormalValue | QuotedValue
+//   NormalValue ->   regex([^separator]*)
+//   QuotedValue ->   " Escaped "
+//   Escaped ->       <nil> | NormalChar Escaped | EscapedChar Escaped
+//   EscapedChar ->   \\ | \"
+//   NormalChar ->    <not eChar>
+//
+// An empty string is considered a valid input and will result in an empty
+// Filter.
+func (p *filterParser) Parse(s string) (Filter, ParseError) {
 	if len(s) == 0 {
-		return &filter{conds: make(map[string][]Condition, 0)}, nil
+		return make(map[string][]Condition, 0), nil
 	}
-	conds, _, err := p.parseConditions(s, 0)
+	filter, _, err := p.parseConditions(s, 0)
 	if err != nil {
 		return nil, err
 	}
-	return &filter{conds: conds}, nil
+	return filter, nil
 }
 
 const (
@@ -147,7 +185,7 @@ const (
 	quote           = '"'
 )
 
-func (p *filterParser) parseConditions(s string, start int) (map[string][]Condition, int, error) {
+func (p *filterParser) parseConditions(s string, start int) (map[string][]Condition, int, ParseError) {
 	cond, i, err := p.parseCondition(s, start)
 	if err != nil {
 		return nil, i, err
@@ -160,16 +198,12 @@ func (p *filterParser) parseConditions(s string, start int) (map[string][]Condit
 			return nil, i, err
 		}
 		xs := m[cond.key]
-		if xs == nil {
-			m[cond.key] = []Condition{cond}
-		} else {
-			m[cond.key] = append(xs, cond)
-		}
+		m[cond.key] = append(xs, cond)
 	}
 	return m, start, nil
 }
 
-func (p *filterParser) parseCondition(s string, start int) (condition, int, error) {
+func (p *filterParser) parseCondition(s string, start int) (condition, int, ParseError) {
 	keyParts, i, err := p.parseNameParts(s, start)
 	if err != nil {
 		return condition{}, i, err
@@ -185,7 +219,7 @@ func (p *filterParser) parseCondition(s string, start int) (condition, int, erro
 	return condition{strings.Join(keyParts, string(nameSeparator)), keyParts, op, value}, i, nil
 }
 
-func (p *filterParser) parseFullName(s string, start int) (string, int, error) {
+func (p *filterParser) parseFullName(s string, start int) (string, int, ParseError) {
 	parts, i, err := p.parseNameParts(s, start)
 	if err != nil {
 		return "", i, err
@@ -193,7 +227,7 @@ func (p *filterParser) parseFullName(s string, start int) (string, int, error) {
 	return strings.Join(parts, "."), i, nil
 }
 
-func (p *filterParser) parseNameParts(s string, start int) ([]string, int, error) {
+func (p *filterParser) parseNameParts(s string, start int) ([]string, int, ParseError) {
 	part, i, err := p.parseName(s, start)
 	if err != nil {
 		return nil, i, err
@@ -210,12 +244,12 @@ func (p *filterParser) parseNameParts(s string, start int) ([]string, int, error
 	return parts, i, nil
 }
 
-func (p *filterParser) parseName(s string, start int) (string, int, error) {
+func (p *filterParser) parseName(s string, start int) (string, int, ParseError) {
 	if len(s) == start {
-		return "", start, &ParseError{"expected a name", start, s[start:start]}
+		return "", start, NewParseError("unexpected end of string, expected a name", start, s[start:])
 	}
 	if !unicode.IsLetter(rune(s[start])) {
-		return "", start, &ParseError{"expected a letter", start, s[start:start]}
+		return "", start, NewParseError("name must start with letter", start, s[start:])
 	}
 	i := start + 1
 	for ; i < len(s); i += 1 {
@@ -233,7 +267,7 @@ func (p *filterParser) parseName(s string, start int) (string, int, error) {
 	return s[start:i], i, nil
 }
 
-func (p *filterParser) parseOperator(s string, start int) (string, int, error) {
+func (p *filterParser) parseOperator(s string, start int) (string, int, ParseError) {
 	i := start
 	for i < len(s) {
 		i += 1
@@ -241,10 +275,10 @@ func (p *filterParser) parseOperator(s string, start int) (string, int, error) {
 			return v, i, nil
 		}
 	}
-	return "", i, &ParseError{"expected operator", start, s[start:i]}
+	return "", i, NewParseError("expected operator", start, s[start:])
 }
 
-func (p *filterParser) parseValue(s string, start int) (string, int, error) {
+func (p *filterParser) parseValue(s string, start int) (string, int, ParseError) {
 	if start == len(s) {
 		return "", start, nil
 	}
@@ -254,8 +288,7 @@ func (p *filterParser) parseValue(s string, start int) (string, int, error) {
 	return parseNormalValue(s, start)
 }
 
-func parseNormalValue(s string, start int) (string, int, error) {
-	// normalValue ->	regex([^separator]*)
+func parseNormalValue(s string, start int) (string, int, ParseError) {
 	i := strings.IndexByte(s[start:], separator)
 	if i == -1 {
 		return s[start:], len(s), nil
@@ -263,19 +296,19 @@ func parseNormalValue(s string, start int) (string, int, error) {
 	return s[start : start+i], start + i, nil
 }
 
-func parseQuotedValue(s string, start int) (string, int, error) {
+func parseQuotedValue(s string, start int) (string, int, ParseError) {
 	i := start + 1
 	v, i, err := parseQuotesEscaped(s, i)
 	if err != nil {
 		return v, i, err
 	}
 	if len(s) <= i || s[i] != quote {
-		return "", start, &ParseError{"unterminated quoted value", start, s[start:i]}
+		return "", start, NewParseError("unterminated quoted value", start, s[start:])
 	}
 	return v, i, err
 }
 
-func parseQuotesEscaped(s string, start int) (string, int, error) {
+func parseQuotesEscaped(s string, start int) (string, int, ParseError) {
 	sb := strings.Builder{}
 	i := start
 	escape := false

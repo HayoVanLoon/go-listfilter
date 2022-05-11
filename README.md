@@ -4,24 +4,36 @@
 
 A library for parsing filter expressions as found in list and search web calls.
 
-The string should adher to the following grammar:
+Examples of filter strings:
+
 ```text
-Filter ->           <nil> | conditions
-conditions ->       Condition | Condition separator Conditions
-separator ->        ,
-Condition ->        fullName operator value
-fullName ->         nameParts
-nameParts ->        name | name nameSeparator nameParts
-nameSeparator ->    .
-name ->             regex([a-zA-Z][a-zA-Z0-9_]*)
-operator ->         regex([^a-zA-Z0-9_].*)
-value ->            normalValue | quotedValue
-normalValue ->      regex([^separator]*)
-quotedValue ->      " escaped "
-escaped ->          <nil> | nChar escaped | eChar escaped
-eChar ->            \\ | \"
-nChar ->            <not eChar>
+  "foo=bar"
+  "foo.bar=bla"
+  "foo=bar,bla=vla"
+  "foo>bar,foo=bar"
 ```
+
+The filter string should adher to the following grammar:
+
+```text
+  Filter ->        <nil> | Conditions
+  Conditions ->    Condition | Condition Separator Conditions
+  Separator ->     ,
+  Condition ->     FullName Operator Value
+  FullName ->      NameParts
+  NameParts ->     Name | Name NameSeparator NameParts
+  NameSeparator -> .
+  Name ->          regex([a-zA-Z][a-zA-Z0-9_]*)
+  Operator ->      regex([^a-zA-Z0-9_].*)
+  Value ->         NormalValue | QuotedValue
+  NormalValue ->   regex([^separator]*)
+  QuotedValue ->   " Escaped "
+  Escaped ->       <nil> | NormalChar Escaped | EscapedChar Escaped
+  EscapedChar ->   \\ | \"
+  NormalChar ->    <not eChar>
+```
+
+An empty string is considered a valid input and will result in an empty Filter.
 
 # License
 

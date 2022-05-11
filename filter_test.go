@@ -8,61 +8,6 @@ import (
 	"testing"
 )
 
-func Test_filter_Size(t *testing.T) {
-	type fields struct {
-		conds map[string][]Condition
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &filter{
-				conds: tt.fields.conds,
-			}
-			if got := f.Size(); got != tt.want {
-				t.Errorf("Size() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_filter_Get(t *testing.T) {
-	type fields struct {
-		conds map[string][]Condition
-	}
-	type args struct {
-		k string
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   Condition
-		want1  bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &filter{
-				conds: tt.fields.conds,
-			}
-			got, got1 := f.Get(tt.args.k)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Get() got = %v, want %v", got, tt.want)
-			}
-			if got1 != tt.want1 {
-				t.Errorf("Get() got1 = %v, want %v", got1, tt.want1)
-			}
-		})
-	}
-}
-
 func Test_filterParser_Parse(t *testing.T) {
 	type fields struct {
 		ops map[string]bool
@@ -81,9 +26,9 @@ func Test_filterParser_Parse(t *testing.T) {
 		{
 			"simple single condition",
 			standardFields,
-			args{s: "foo=bar"},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")}},
+			args{s: "fo_o1=bar"},
+			map[string][]Condition{
+				"fo_o1": {NewCondition("fo_o1", []string{"fo_o1"}, "=", "bar")},
 			},
 			nil,
 		},
@@ -91,15 +36,15 @@ func Test_filterParser_Parse(t *testing.T) {
 			"empty filter",
 			standardFields,
 			args{s: ""},
-			&filter{conds: map[string][]Condition{}},
+			map[string][]Condition{},
 			nil,
 		},
 		{
 			"complex name",
 			standardFields,
 			args{s: "foo.bar.bla=vla"},
-			&filter{conds: map[string][]Condition{
-				"foo.bar.bla": {NewCondition("foo.bar.bla", []string{"foo", "bar", "bla"}, "=", "vla")}},
+			map[string][]Condition{
+				"foo.bar.bla": {NewCondition("foo.bar.bla", []string{"foo", "bar", "bla"}, "=", "vla")},
 			},
 			nil,
 		},
@@ -107,8 +52,8 @@ func Test_filterParser_Parse(t *testing.T) {
 			"multi-character operator",
 			standardFields,
 			args{s: "foo!=bar"},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "!=", "bar")}},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "!=", "bar")},
 			},
 			nil,
 		},
@@ -116,7 +61,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			"operator as value",
 			standardFields,
 			args{s: "foo=="},
-			&filter{conds: map[string][]Condition{"foo": {NewCondition("foo", []string{"foo"}, "=", "=")}}},
+			map[string][]Condition{"foo": {NewCondition("foo", []string{"foo"}, "=", "=")}},
 			nil,
 		},
 		{
@@ -124,17 +69,17 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo*bar"},
 			nil,
-			&ParseError{"expected operator", 3, "*bar"},
+			NewParseError("expected operator", 3, "*bar"),
 		},
 		{
 			"multiple conditions",
 			standardFields,
 			args{s: "foo=bar,bla=vla,moo=boo"},
-			&filter{conds: map[string][]Condition{
+			map[string][]Condition{
 				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
 				"bla": {NewCondition("bla", []string{"bla"}, "=", "vla")},
 				"moo": {NewCondition("moo", []string{"moo"}, "=", "boo")},
-			}},
+			},
 			nil,
 		},
 		{
@@ -142,14 +87,14 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar,,bla=vla"},
 			nil,
-			&ParseError{"expected a letter", 8, ""},
+			NewParseError("name must start with letter", 8, ",bla=vla"),
 		},
 		{
 			"simple single condition",
 			standardFields,
 			args{s: "foo=bar"},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")}},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
 			},
 			nil,
 		},
@@ -157,8 +102,8 @@ func Test_filterParser_Parse(t *testing.T) {
 			"empty value",
 			standardFields,
 			args{s: "foo="},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "")}},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "")},
 			},
 			nil,
 		},
@@ -166,8 +111,17 @@ func Test_filterParser_Parse(t *testing.T) {
 			"quoted value",
 			standardFields,
 			args{s: "foo=\"say \\\"bar\\\"\""},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "say \"bar\"")}},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "say \"bar\"")},
+			},
+			nil,
+		},
+		{
+			"empty quoted value",
+			standardFields,
+			args{s: "foo=\"\""},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "")},
 			},
 			nil,
 		},
@@ -175,8 +129,8 @@ func Test_filterParser_Parse(t *testing.T) {
 			"quoted value with escaped escape character",
 			standardFields,
 			args{s: "foo=\"say\\\\ \\n \\\"bar\\\"\""},
-			&filter{conds: map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "say\\ \\n \"bar\"")}},
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "say\\ \\n \"bar\"")},
 			},
 			nil,
 		},
@@ -185,28 +139,63 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo"},
 			nil,
-			&ParseError{"expected operator", 3, ""},
+			NewParseError("expected operator", 3, ""),
+		},
+		{
+			"! name starting with non-letter",
+			standardFields,
+			args{s: "1foo=bar"},
+			nil,
+			NewParseError("name must start with letter", 0, "1foo=bar"),
+		},
+		{
+			"! name with empty path",
+			standardFields,
+			args{s: "foo..bar=bla"},
+			nil,
+			NewParseError("name must start with letter", 4, ".bar=bla"),
 		},
 		{
 			"! name only first (error)",
 			standardFields,
 			args{s: "foo,bar=bla"},
 			nil,
-			&ParseError{"expected operator", 3, ",bar=bla"},
+			NewParseError("expected operator", 3, ",bar=bla"),
 		},
 		{
 			"! name only second (error)",
 			standardFields,
 			args{s: "foo=bar,bla"},
 			nil,
-			&ParseError{"expected operator", 11, ""},
+			NewParseError("expected operator", 11, ""),
+		},
+		{
+			"empty first element",
+			standardFields,
+			args{s: ",foo=bar"},
+			nil,
+			NewParseError("name must start with letter", 0, ",foo=bar"),
+		},
+		{
+			"empty last element",
+			standardFields,
+			args{s: "foo=bar,"},
+			nil,
+			NewParseError("unexpected end of string, expected a name", 8, ""),
+		},
+		{
+			"empty middle element",
+			standardFields,
+			args{s: "foo=bar,,bla=vla"},
+			nil,
+			NewParseError("name must start with letter", 8, ",bla=vla"),
 		},
 		{
 			"! unterminated quoted value",
 			standardFields,
 			args{s: "foo=\"bar"},
 			nil,
-			&ParseError{"unterminated quoted value", 4, "\"bar"},
+			NewParseError("unterminated quoted value", 4, "\"bar"),
 		},
 	}
 	for _, tt := range tests {
@@ -217,9 +206,9 @@ func Test_filterParser_Parse(t *testing.T) {
 			got, err := p.Parse(tt.args.s)
 			if !reflect.DeepEqual(err, tt.wantErr) {
 				if err == nil {
-					t.Errorf("Expected %v, got %v", tt.wantErr, err)
+					t.Errorf("\nExpected: %v,\ngot:      %v", tt.wantErr, err)
 				} else {
-					t.Errorf("Expected = %v, wantErr %v", err, tt.wantErr)
+					t.Errorf("\nExpected: %v,\ngot:      %v", tt.wantErr, err)
 				}
 				return
 			}
@@ -237,11 +226,161 @@ func BenchmarkFilterParser_Parse(b *testing.B) {
 	}
 	cases := []struct {
 		args args
-	}{}
+	}{
+		{args: args{s: ""}},
+		{args: args{s: "foo=bar"}},
+		{args: args{s: "foo=bar,bla=vla"}},
+		{args: args{s: "foo.bar=bla"}},
+		{args: args{s: "foo.bar=bla,vla=moo"}},
+		{args: args{s: "foo=bar,bla=vla,moo=boo"}},
+		{args: args{s: "foo=bar,bla=vla,moo=boo,,error"}},
+	}
 
 	for i := 0; i < b.N; i += 1 {
 		for _, c := range cases {
 			_, _ = p.Parse(c.args.s)
 		}
+	}
+}
+
+func TestFilter_GetFirst(t *testing.T) {
+	type args struct {
+		k string
+	}
+	tests := []struct {
+		name  string
+		f     Filter
+		args  args
+		want  Condition
+		want1 bool
+	}{
+		{
+			"simple",
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
+			},
+			args{"foo"},
+			NewCondition("foo", []string{"foo"}, "=", "bar"),
+			true,
+		},
+		{
+			"multi-part name",
+			map[string][]Condition{
+				"foo.bar": {NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla")},
+			},
+			args{"foo.bar"},
+			NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla"),
+			true,
+		},
+		{
+			"empty",
+			nil,
+			args{"foo"},
+			nil,
+			false,
+		},
+		{
+			"unknown",
+			map[string][]Condition{
+				"foo.bar": {},
+			},
+			args{"bar"},
+			nil,
+			false,
+		},
+		{
+			"two conditions",
+			map[string][]Condition{
+				"foo": {
+					NewCondition("foo", []string{"foo"}, "=", "bar"),
+					NewCondition("bla", []string{"bla"}, "<", "vla"),
+				},
+			},
+			args{"foo"},
+			NewCondition("foo", []string{"foo"}, "=", "bar"),
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1 := tt.f.GetFirst(tt.args.k)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Get() got = %v, want %v", got, tt.want)
+			}
+			if got1 != tt.want1 {
+				t.Errorf("Get() got1 = %v, want %v", got1, tt.want1)
+			}
+		})
+	}
+}
+
+func TestFilter_GetLast(t *testing.T) {
+	type args struct {
+		k string
+	}
+	tests := []struct {
+		name  string
+		f     Filter
+		args  args
+		want  Condition
+		want1 bool
+	}{
+		{
+			"simple",
+			map[string][]Condition{
+				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
+			},
+			args{"foo"},
+			NewCondition("foo", []string{"foo"}, "=", "bar"),
+			true,
+		},
+		{
+			"multi-part name",
+			map[string][]Condition{
+				"foo.bar": {NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla")},
+			},
+			args{"foo.bar"},
+			NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla"),
+			true,
+		},
+		{
+			"empty",
+			nil,
+			args{"foo"},
+			nil,
+			false,
+		},
+		{
+			"unknown",
+			map[string][]Condition{
+				"foo.bar": {},
+			},
+			args{"bar"},
+			nil,
+			false,
+		},
+		{
+			"two conditions",
+			map[string][]Condition{
+				"foo": {
+					NewCondition("foo", []string{"foo"}, "=", "bar"),
+					NewCondition("foo", []string{"foo"}, "<", "bar"),
+				},
+			},
+			args{"foo"},
+			NewCondition("foo", []string{"foo"}, "<", "bar"),
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1 := tt.f.GetLast(tt.args.k)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Get() got = %v, want %v", got, tt.want)
+			}
+			if got1 != tt.want1 {
+				t.Errorf("Get() got1 = %v, want %v", got1, tt.want1)
+			}
+		})
 	}
 }
