@@ -156,6 +156,13 @@ func Test_filterParser_Parse(t *testing.T) {
 			NewParseError("name must start with letter", 4, ".bar=bla"),
 		},
 		{
+			"! name with invalid part",
+			standardFields,
+			args{s: "foo.1.bar=bla"},
+			nil,
+			NewParseError("name must start with letter", 4, "1.bar=bla"),
+		},
+		{
 			"! name only first (error)",
 			standardFields,
 			args{s: "foo,bar=bla"},
