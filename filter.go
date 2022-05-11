@@ -204,7 +204,7 @@ func (p *filterParser) parseConditions(s string, start int) (map[string][]Condit
 }
 
 func (p *filterParser) parseCondition(s string, start int) (condition, int, ParseError) {
-	keyParts, i, err := p.parseNameParts(s, start)
+	key, keyParts, i, err := p.parseFullName(s, start)
 	if err != nil {
 		return condition{}, i, err
 	}
@@ -216,15 +216,15 @@ func (p *filterParser) parseCondition(s string, start int) (condition, int, Pars
 	if err != nil {
 		return condition{}, i, err
 	}
-	return condition{strings.Join(keyParts, string(nameSeparator)), keyParts, op, value}, i, nil
+	return condition{key, keyParts, op, value}, i, nil
 }
 
-func (p *filterParser) parseFullName(s string, start int) (string, int, ParseError) {
+func (p *filterParser) parseFullName(s string, start int) (string, []string, int, ParseError) {
 	parts, i, err := p.parseNameParts(s, start)
 	if err != nil {
-		return "", i, err
+		return "", nil, i, err
 	}
-	return strings.Join(parts, "."), i, nil
+	return strings.Join(parts, string(nameSeparator)), parts, i, nil
 }
 
 func (p *filterParser) parseNameParts(s string, start int) ([]string, int, ParseError) {
