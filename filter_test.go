@@ -4,6 +4,7 @@
 package listfilter
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -387,6 +388,70 @@ func TestFilter_GetLast(t *testing.T) {
 			}
 			if got1 != tt.want1 {
 				t.Errorf("Get() got1 = %v, want %v", got1, tt.want1)
+			}
+		})
+	}
+}
+
+func Test_condition_BoolValue(t *testing.T) {
+	type fields struct {
+		key         string
+		keyParts    []string
+		op          string
+		stringValue string
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		want    bool
+		wantErr error
+	}{
+		{
+			"simple true",
+			fields{"foo", []string{"foo"}, "=", "true"},
+			true,
+			nil,
+		},
+		{
+			"simple false",
+			fields{"foo", []string{"foo"}, "=", "false"},
+			false,
+			nil,
+		},
+		{
+			"case-insensitive true",
+			fields{"foo", []string{"foo"}, "=", "tRue"},
+			true,
+			nil,
+		},
+		{
+			"case-insensitive false",
+			fields{"foo", []string{"foo"}, "=", "faLse"},
+			false,
+			nil,
+		},
+		{
+			"invalid input",
+			fields{"foo", []string{"foo"}, "=", "42"},
+			false,
+			fmt.Errorf("42 is not a valid boolean"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := condition{
+				key:         tt.fields.key,
+				keyParts:    tt.fields.keyParts,
+				op:          tt.fields.op,
+				stringValue: tt.fields.stringValue,
+			}
+			got, err := c.BoolValue()
+			if (err != nil) != (tt.wantErr != nil) {
+				t.Errorf("BoolValue() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("BoolValue() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
