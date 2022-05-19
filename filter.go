@@ -18,41 +18,20 @@ Examples of filter strings:
 
 The filter string should adher to the following grammar:
 
-  Filter:
-      <nil>
-      Conditions
-  Conditions:
-      Condition { Separator Conditions }
-  Separator:
- 	 Space 'AND' Space
-  Condition:
-      FullName Operator Value
-  FullName:
-      NameParts
-  NameParts:
-      Name
-      Name NameSeparator NameParts
-  NameSeparator:
-      '.'
-  Name:
-      regex([a-zA-Z][a-zA-Z0-9_]*)
-  Operator:
-      regex([^a-zA-Z0-9_].*)
-  Value
-      NormalValue | QuotedValue
-  NormalValue
-      regex([^separator\s]*)
-  QuotedValue
-      '"' Escaped '"'
-  Escaped
-      <nil>
-      NormalChar Escaped
-      EscapedChar Escaped
-  EscapedChar
-      '\\'
-      '\"'
-  NormalChar
-      <not eChar>
+  Filter =        <nil> | Conditions
+  Conditions =    Condition { Separator Conditions }
+  Separator =     Space 'AND' Space
+  Condition =     FullName Operator Value
+  FullName =      NameParts
+  NameParts =     Name | Name NameSeparator NameParts
+  NameSeparator = '.'
+  Name =          regex([a-zA-Z][a-zA-Z0-9_]*)
+  Operator =      regex([^a-zA-Z0-9_].*)
+  Value =         NormalValue | QuotedValue
+  NormalValue =   [^separator\s"] { regex([^separator\s]*) }
+  QuotedValue =   '"' Escaped '"'
+  Escaped =       <nil> | NormalChar Escaped | EscapedChar Escaped
+  EscapedChar =   '\\' | '\"' NormalChar | <not eChar>
 
 An empty string is considered a valid input and will result in an empty Filter.
 */
@@ -63,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // A FilterParser parses a filter string into a Filter. If parsing fails, a
@@ -80,6 +60,9 @@ type Condition interface {
 	IntValue() (int, error)
 	BoolValue() (bool, error)
 	FloatValue() (float64, error)
+	// Next returns the next condition in the filter. It returns a tuple; the
+	// first points to an AND condition, the second to an OR.
+	Next() (Condition, Condition)
 }
 
 type condition struct {
@@ -87,11 +70,13 @@ type condition struct {
 	keyParts    []string
 	op          string
 	stringValue string
+	nextAnd     *condition
+	nextOr      *condition
 }
 
 // NewCondition creates a new Condition from the specified parameters.
 func NewCondition(key string, keyParts []string, op, stringValue string) Condition {
-	return condition{key, keyParts, op, stringValue}
+	return condition{key, keyParts, op, stringValue, nil, nil}
 }
 
 // Key returns the condition's key.
@@ -145,6 +130,32 @@ func (c condition) FloatValue() (float64, error) {
 		return 0, fmt.Errorf("%s is not a valid float", c.stringValue)
 	}
 	return f, nil
+}
+
+type noNext error
+
+var NoNext = noNext(fmt.Errorf("no next"))
+
+func (c condition) NextAnd() Condition {
+	if c.nextAnd == (*condition)(nil) {
+		return nil
+	}
+	return c.nextAnd
+}
+
+func (c condition) NextOr() Condition {
+	if c.nextOr == (*condition)(nil) {
+		return nil
+	}
+	return c.nextOr
+}
+
+func (c condition) Next() (Condition, Condition) {
+	return c.NextAnd(), c.NextOr()
+}
+
+func (c condition) String() string {
+	return fmt.Sprintf("%s %s %s %v %v", strings.Join(c.keyParts, "."), c.op, c.stringValue, c.nextAnd, c.nextOr)
 }
 
 // A ParseError describes the error that occurred while parsing. In addition, it
@@ -250,7 +261,12 @@ func (p *filterParser) parseConditions(s string, start int) (map[string][]Condit
 	if err != nil {
 		return nil, i, err
 	}
-	m := map[string][]Condition{cond.key: {cond}}
+	m := make(map[string][]Condition)
+	if i == len(s) {
+		m[cond.key] = []Condition{cond}
+		return m, i, nil
+	}
+	prev := cond
 	for i < len(s) {
 		_, i, err = parseSeparator(s, i)
 		if err != nil {
@@ -260,9 +276,11 @@ func (p *filterParser) parseConditions(s string, start int) (map[string][]Condit
 		if err != nil {
 			return nil, i, err
 		}
-		xs := m[cond.key]
-		m[cond.key] = append(xs, cond)
+		prev.nextAnd = &cond
+		m[prev.key] = append(m[prev.key], prev)
+		prev = cond
 	}
+	m[prev.key] = append(m[prev.key], prev)
 	return m, start, nil
 }
 
@@ -302,7 +320,7 @@ func (p *filterParser) parseCondition(s string, start int) (condition, int, Pars
 	if err != nil {
 		return condition{}, i, err
 	}
-	return condition{key, keyParts, op, value}, i, nil
+	return condition{key, keyParts, op, value, nil, nil}, i, nil
 }
 
 func (p *filterParser) parseFullName(s string, start int) (string, []string, int, ParseError) {
@@ -382,7 +400,13 @@ func (p *filterParser) parseValue(s string, start int) (string, int, ParseError)
 
 func (p *filterParser) parseNormalValue(s string, start int) (string, int, ParseError) {
 	i := start
-	for ; i < len(s) && !unicode.IsSpace(rune(s[i])); i += 1 {
+	w := 0
+	for ; i < len(s); i += w {
+		r, width := utf8.DecodeRuneInString(s[i:])
+		if unicode.IsSpace(r) {
+			break
+		}
+		w = width
 	}
 	return s[start:i], i, nil
 }
@@ -403,22 +427,26 @@ func (p *filterParser) parseQuotesEscaped(s string, start int) (string, int, Par
 	sb := strings.Builder{}
 	i := start
 	escape := false
-	for ; i < len(s); i += 1 {
+	w := 0
+	for ; i < len(s); i += w {
+		r, width := utf8.DecodeRuneInString(s[i:])
 		if escape {
-			switch s[i] {
+			switch r {
 			case quote, escapeCharacter:
 			default:
 				// no special meaning, add escape character retroactively
 				sb.WriteRune(escapeCharacter)
 			}
 			escape = false
-		} else if s[i] == quote {
+		} else if r == quote {
 			break
-		} else if s[i] == escapeCharacter {
+		} else if r == escapeCharacter {
 			escape = true
+			w = width
 			continue
 		}
-		sb.WriteByte(s[i])
+		sb.WriteRune(r)
+		w = width
 	}
 	return sb.String(), i, nil
 }

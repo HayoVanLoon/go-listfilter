@@ -7,8 +7,40 @@ package listfilter
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode"
 )
+
+func conditionsEqual(left, right Condition) bool {
+	if left.Key() != right.Key() {
+		return false
+	}
+	if len(left.KeyParts()) != len(right.KeyParts()) {
+		return false
+	}
+	for i := range left.KeyParts() {
+		if left.KeyParts()[i] != right.KeyParts()[i] {
+			return false
+		}
+	}
+	if left.Op() != right.Op() {
+		return false
+	}
+	if left.StringValue() != right.StringValue() {
+		return false
+	}
+	// hvl: shallow check for (non-)nil
+	a, b := left.Next()
+	c, d := right.Next()
+	if a == nil && c != nil || a != nil && c == nil {
+		return false
+	}
+	if b == nil && d != nil || b != nil && d == nil {
+		return false
+	}
+	return true
+}
 
 func Test_filterParser_Parse(t *testing.T) {
 	type fields struct {
@@ -33,6 +65,35 @@ func Test_filterParser_Parse(t *testing.T) {
 			args{s: "fo_o1=bar"},
 			map[string][]Condition{
 				"fo_o1": {NewCondition("fo_o1", []string{"fo_o1"}, "=", "bar")},
+			},
+			nil,
+		},
+		{
+			"one-character value",
+			standardFields,
+			args{s: "fo_o1=a"},
+			map[string][]Condition{
+				"fo_o1": {NewCondition("fo_o1", []string{"fo_o1"}, "=", "a")},
+			},
+			nil,
+		},
+		{
+			// hvl: fuzz finding
+			"non-latin character",
+			standardFields,
+			args{s: "fo_o1=\ud185"},
+			map[string][]Condition{
+				"fo_o1": {NewCondition("fo_o1", []string{"fo_o1"}, "=", "\ud185")},
+			},
+			nil,
+		},
+		{
+			// hvl: fuzz finding
+			"quoted non-latin character",
+			standardFields,
+			args{s: "fo_o1=\"\ud185\""},
+			map[string][]Condition{
+				"fo_o1": {NewCondition("fo_o1", []string{"fo_o1"}, "=", "\ud185")},
 			},
 			nil,
 		},
@@ -79,33 +140,42 @@ func Test_filterParser_Parse(t *testing.T) {
 			"multiple conditions",
 			standardFields,
 			args{s: "foo=bar AND\n\tbla=vla   AND moo=boo"},
-			map[string][]Condition{
-				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
-				"bla": {NewCondition("bla", []string{"bla"}, "=", "vla")},
-				"moo": {NewCondition("moo", []string{"moo"}, "=", "boo")},
-			},
+			func() map[string][]Condition {
+				dummy := &condition{}
+				return map[string][]Condition{
+					"foo": {condition{"foo", []string{"foo"}, "=", "bar", dummy, nil}},
+					"bla": {condition{"bla", []string{"bla"}, "=", "vla", dummy, nil}},
+					"moo": {condition{"moo", []string{"moo"}, "=", "boo", nil, nil}},
+				}
+			}(),
 			nil,
 		},
 		{
 			"multiple conditions and snake_case",
 			fields{ops: NewParser().(*filterParser).ops, snakeCase: true},
 			args{s: "fooBar=fooBar AND\n\tblaVla=bla_vla   AND mo_O=boo"},
-			map[string][]Condition{
-				"foo_bar": {NewCondition("foo_bar", []string{"foo_bar"}, "=", "fooBar")},
-				"bla_vla": {NewCondition("bla_vla", []string{"bla_vla"}, "=", "bla_vla")},
-				"mo_o":    {NewCondition("mo_o", []string{"mo_o"}, "=", "boo")},
-			},
+			func() map[string][]Condition {
+				dummy := &condition{}
+				return map[string][]Condition{
+					"foo_bar": {condition{"foo_bar", []string{"foo_bar"}, "=", "fooBar", dummy, nil}},
+					"bla_vla": {condition{"bla_vla", []string{"bla_vla"}, "=", "bla_vla", dummy, nil}},
+					"mo_o":    {condition{"mo_o", []string{"mo_o"}, "=", "boo", nil, nil}},
+				}
+			}(),
 			nil,
 		},
 		{
 			"multiple conditions and camelCase",
 			fields{ops: NewParser().(*filterParser).ops, camelCase: true},
 			args{s: "foo_Bar=foo_Bar AND\n\tBla_vla=bla_vla   AND mo_O=boo"},
-			map[string][]Condition{
-				"fooBar": {NewCondition("fooBar", []string{"fooBar"}, "=", "foo_Bar")},
-				"blaVla": {NewCondition("blaVla", []string{"blaVla"}, "=", "bla_vla")},
-				"moO":    {NewCondition("moO", []string{"moO"}, "=", "boo")},
-			},
+			func() map[string][]Condition {
+				dummy := &condition{}
+				return map[string][]Condition{
+					"fooBar": {condition{"fooBar", []string{"fooBar"}, "=", "foo_Bar", dummy, nil}},
+					"blaVla": {condition{"blaVla", []string{"blaVla"}, "=", "bla_vla", dummy, nil}},
+					"moO":    {condition{"moO", []string{"moO"}, "=", "boo", nil, nil}},
+				}
+			}(),
 			nil,
 		},
 		{
@@ -243,8 +313,65 @@ func Test_filterParser_Parse(t *testing.T) {
 				t.Errorf("\nExpected: %v,\ngot:      %v", tt.wantErr, err)
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			if len(got) != len(tt.want) {
 				t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
+			}
+			for k := range got {
+				for i := range got[k] {
+					if !conditionsEqual(got[k][i].(condition), tt.want[k][i].(condition)) {
+						t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCondition_Next(t *testing.T) {
+	type args struct {
+		s        string
+		firstKey string
+	}
+	cases := []struct {
+		name string
+		args args
+		want []Condition
+	}{
+		{
+			"single",
+			args{"foo=bar", "foo"},
+			[]Condition{condition{"foo", []string{"foo"}, "=", "bar", nil, nil}},
+		},
+		{
+			"simple two",
+			args{"foo=bar AND bla=vla", "foo"},
+			func() []Condition {
+				c1 := condition{"bla", []string{"bla"}, "=", "vla", nil, nil}
+				c0 := condition{"foo", []string{"foo"}, "=", "bar", &c1, nil}
+				return []Condition{c0, c1}
+			}(),
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser()
+			got, _ := p.Parse(tt.args.s)
+			c := got[tt.args.firstKey][0]
+			if c == nil {
+				t.Errorf("Expected key %s not found", tt.args.firstKey)
+			}
+			xs := []Condition{c}
+			for {
+				c, _ = c.Next()
+				if c == nil {
+					break
+				}
+				xs = append(xs, c)
+			}
+			for i := range xs {
+				if !conditionsEqual(xs[i], tt.want[i]) {
+					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, xs)
+				}
 			}
 		})
 	}
@@ -533,4 +660,26 @@ func Test_camelCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzFilterParser_Parse(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data string) {
+		if strings.TrimSpace(data) != data {
+			return
+		}
+		if len(data) > 0 && data[0] == '"' {
+			return
+		}
+		p := NewParser()
+		s := fmt.Sprintf("foo=%s,bar=%s", data, data)
+		_, err := p.Parse(s)
+		if err != nil {
+			for _, r := range data {
+				if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+					return
+				}
+			}
+			t.Errorf("unexpected error: %v\n%x\n%s", err, []byte(data), data)
+		}
+	})
 }
