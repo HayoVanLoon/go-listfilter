@@ -13,6 +13,9 @@ import (
 )
 
 func conditionsEqual(left, right Condition) bool {
+	if (left == nil) != (right == nil) {
+		return false
+	}
 	if left.Key() != right.Key() {
 		return false
 	}
@@ -31,8 +34,8 @@ func conditionsEqual(left, right Condition) bool {
 		return false
 	}
 	// hvl: shallow check for (non-)nil
-	a, b := left.Next()
-	c, d := right.Next()
+	a, b := left.AndOr()
+	c, d := right.AndOr()
 	if a == nil && c != nil || a != nil && c == nil {
 		return false
 	}
@@ -56,7 +59,7 @@ func Test_filterParser_Parse(t *testing.T) {
 		name    string
 		fields  fields
 		args    args
-		want    Filter
+		want    map[string][]Condition
 		wantErr error
 	}{
 		{
@@ -133,7 +136,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			"! unknown operator",
 			standardFields,
 			args{s: "foo*bar"},
-			nil,
+			make(map[string][]Condition),
 			NewParseError("expected operator", 3, "*bar"),
 		},
 		{
@@ -309,68 +312,158 @@ func Test_filterParser_Parse(t *testing.T) {
 				camelCase: tt.fields.camelCase,
 			}
 			got, err := p.Parse(tt.args.s)
-			if !reflect.DeepEqual(err, tt.wantErr) {
-				t.Errorf("\nExpected: %v,\ngot:      %v", tt.wantErr, err)
+			if err != nil {
+				if !reflect.DeepEqual(err, tt.wantErr) {
+					t.Errorf("\nExpected: %v,\ngot:      %v", tt.wantErr, err)
+				}
 				return
 			}
-			if len(got) != len(tt.want) {
+			if got.Len() != len(tt.want) {
 				t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
 			}
-			for k := range got {
-				for i := range got[k] {
-					if !conditionsEqual(got[k][i].(condition), tt.want[k][i].(condition)) {
-						t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
-					}
+
+			//for k := range got {
+			//	for i := range got[k] {
+			//		if !conditionsEqual(got[k][i].(condition), tt.want[k][i].(condition)) {
+			//			t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
+			//		}
+			//	}
+			//}
+		})
+	}
+}
+
+type filterFields struct {
+	m     map[string][]Condition
+	first Condition
+}
+
+func createCondition(i int) condition {
+	key := fmt.Sprintf("key%d", i)
+	val := fmt.Sprintf("val%d", i)
+	return condition{key, []string{key}, "=", val, nil, nil}
+}
+
+func createFields(n int) filterFields {
+	fs := filterFields{
+		m: make(map[string][]Condition),
+	}
+	if n == 0 {
+		return fs
+	}
+	prev := createCondition(0)
+	if n == 1 {
+		fs.first = prev
+	}
+	for i := 1; i < n; i += 1 {
+		c := createCondition(i)
+		prev.nextAnd = &c
+		if i == 1 {
+			fs.first = prev
+		}
+		fs.m[prev.key] = []Condition{prev}
+		prev = c
+	}
+	fs.m[prev.key] = []Condition{prev}
+	return fs
+}
+
+func createWant(n int) []condition {
+	var cs []condition
+	for i := 0; i < n; i += 1 {
+		c := createCondition(i)
+		if len(cs) > 0 {
+			cs[i-1].nextAnd = &c
+		}
+		cs = append(cs, c)
+	}
+	return cs
+}
+
+func TestFilter_Conditions(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields filterFields
+		want   []condition
+	}{
+		{"empty", createFields(0), []condition{}},
+		{"single", createFields(1), createWant(1)},
+		{"double", createFields(2), createWant(2)},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			f := filter{
+				m:     tt.fields.m,
+				first: tt.fields.first,
+			}
+			var xs []Condition
+			it := f.Conditions()
+			for {
+				c, err := it.Next()
+				if err != nil && err != Done {
+					t.Errorf("unexpected error %s", err)
 				}
+				if c != nil {
+					xs = append(xs, c)
+				}
+				if err == Done {
+					break
+				}
+			}
+			i := 0
+			for ; i < len(xs) && i < len(tt.want); i += 1 {
+				if !conditionsEqual(xs[i], tt.want[i]) {
+					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, xs)
+				}
+			}
+			if i < len(xs) {
+				t.Errorf("unexpectd conditions %v", xs[i:])
+			}
+			if i < len(tt.want) {
+				t.Errorf("missing %v", tt.want[i:])
 			}
 		})
 	}
 }
 
-func TestCondition_Next(t *testing.T) {
-	type args struct {
-		s        string
-		firstKey string
-	}
+func TestCondition_AndOr(t *testing.T) {
 	cases := []struct {
-		name string
-		args args
-		want []Condition
+		name   string
+		fields filterFields
+		want   []condition
 	}{
-		{
-			"single",
-			args{"foo=bar", "foo"},
-			[]Condition{condition{"foo", []string{"foo"}, "=", "bar", nil, nil}},
-		},
-		{
-			"simple two",
-			args{"foo=bar AND bla=vla", "foo"},
-			func() []Condition {
-				c1 := condition{"bla", []string{"bla"}, "=", "vla", nil, nil}
-				c0 := condition{"foo", []string{"foo"}, "=", "bar", &c1, nil}
-				return []Condition{c0, c1}
-			}(),
-		},
+		{"empty", createFields(0), createWant(0)},
+		{"single", createFields(1), createWant(1)},
+		{"simple two", createFields(2), createWant(2)},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser()
-			got, _ := p.Parse(tt.args.s)
-			c := got[tt.args.firstKey][0]
+			f := filter{tt.fields.m, tt.fields.first}
+			c := f.FirstCondition()
 			if c == nil {
-				t.Errorf("Expected key %s not found", tt.args.firstKey)
-			}
-			xs := []Condition{c}
-			for {
-				c, _ = c.Next()
-				if c == nil {
-					break
+				if len(tt.want) != 0 {
+					t.Errorf("No first condition in %v", f)
 				}
-				xs = append(xs, c)
+				return
 			}
-			for i := range xs {
-				if !conditionsEqual(xs[i], tt.want[i]) {
-					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, xs)
+			cs := []Condition{c}
+			and, or := c.AndOr()
+			for {
+				if and != nil {
+					cs = append(cs, and)
+					and, or = and.AndOr()
+					continue
+				}
+				if or != nil {
+					cs = append(cs, or)
+					and, or = or.AndOr()
+					continue
+				}
+				break
+			}
+			for i := range cs {
+				if !conditionsEqual(cs[i], tt.want[i]) {
+					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, cs)
 				}
 			}
 		})
@@ -407,55 +500,59 @@ func TestFilter_GetFirst(t *testing.T) {
 	type args struct {
 		k string
 	}
+	type fields struct {
+		m map[string][]Condition
+		// hvl: ignore first
+	}
 	tests := []struct {
-		name  string
-		f     Filter
-		args  args
-		want  Condition
-		want1 bool
+		name   string
+		fields fields
+		args   args
+		want   Condition
+		want1  bool
 	}{
 		{
 			"simple",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
-			},
+			}},
 			args{"foo"},
 			NewCondition("foo", []string{"foo"}, "=", "bar"),
 			true,
 		},
 		{
 			"multi-part name",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo.bar": {NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla")},
-			},
+			}},
 			args{"foo.bar"},
 			NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla"),
 			true,
 		},
 		{
 			"empty",
-			nil,
+			fields{},
 			args{"foo"},
 			nil,
 			false,
 		},
 		{
 			"unknown",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo.bar": {},
-			},
+			}},
 			args{"bar"},
 			nil,
 			false,
 		},
 		{
 			"two conditions",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo": {
 					NewCondition("foo", []string{"foo"}, "=", "bar"),
 					NewCondition("bla", []string{"bla"}, "<", "vla"),
 				},
-			},
+			}},
 			args{"foo"},
 			NewCondition("foo", []string{"foo"}, "=", "bar"),
 			true,
@@ -463,7 +560,8 @@ func TestFilter_GetFirst(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1 := tt.f.GetFirst(tt.args.k)
+			f := filter{m: tt.fields.m}
+			got, got1 := f.GetFirst(tt.args.k)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Get() got = %v, want %v", got, tt.want)
 			}
@@ -478,55 +576,59 @@ func TestFilter_GetLast(t *testing.T) {
 	type args struct {
 		k string
 	}
+	type fields struct {
+		m map[string][]Condition
+		// hvl: ignore first
+	}
 	tests := []struct {
-		name  string
-		f     Filter
-		args  args
-		want  Condition
-		want1 bool
+		name   string
+		fields fields
+		args   args
+		want   Condition
+		want1  bool
 	}{
 		{
 			"simple",
-			map[string][]Condition{
+			fields{m: map[string][]Condition{
 				"foo": {NewCondition("foo", []string{"foo"}, "=", "bar")},
-			},
+			}},
 			args{"foo"},
 			NewCondition("foo", []string{"foo"}, "=", "bar"),
 			true,
 		},
 		{
 			"multi-part name",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo.bar": {NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla")},
-			},
+			}},
 			args{"foo.bar"},
 			NewCondition("foo.bar", []string{"foo", "bar"}, "=", "bla"),
 			true,
 		},
 		{
 			"empty",
-			nil,
+			fields{},
 			args{"foo"},
 			nil,
 			false,
 		},
 		{
 			"unknown",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo.bar": {},
-			},
+			}},
 			args{"bar"},
 			nil,
 			false,
 		},
 		{
 			"two conditions",
-			map[string][]Condition{
+			fields{map[string][]Condition{
 				"foo": {
 					NewCondition("foo", []string{"foo"}, "=", "bar"),
 					NewCondition("foo", []string{"foo"}, "<", "bar"),
 				},
-			},
+			}},
 			args{"foo"},
 			NewCondition("foo", []string{"foo"}, "<", "bar"),
 			true,
@@ -534,7 +636,8 @@ func TestFilter_GetLast(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1 := tt.f.GetLast(tt.args.k)
+			f := filter{m: tt.fields.m}
+			got, got1 := f.GetLast(tt.args.k)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Get() got = %v, want %v", got, tt.want)
 			}

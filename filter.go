@@ -60,9 +60,7 @@ type Condition interface {
 	IntValue() (int, error)
 	BoolValue() (bool, error)
 	FloatValue() (float64, error)
-	// Next returns the next condition in the filter. It returns a tuple; the
-	// first points to an AND condition, the second to an OR.
-	Next() (Condition, Condition)
+	AndOr() (Condition, Condition)
 }
 
 type condition struct {
@@ -132,30 +130,28 @@ func (c condition) FloatValue() (float64, error) {
 	return f, nil
 }
 
-type noNext error
-
-var NoNext = noNext(fmt.Errorf("no next"))
-
-func (c condition) NextAnd() Condition {
+func (c condition) and() Condition {
 	if c.nextAnd == (*condition)(nil) {
 		return nil
 	}
 	return c.nextAnd
 }
 
-func (c condition) NextOr() Condition {
+func (c condition) or() Condition {
 	if c.nextOr == (*condition)(nil) {
 		return nil
 	}
 	return c.nextOr
 }
 
-func (c condition) Next() (Condition, Condition) {
-	return c.NextAnd(), c.NextOr()
+// AndOr returns the next condition in the filter. It returns a tuple; the
+// first points to an AND condition, the second to an OR.
+func (c condition) AndOr() (Condition, Condition) {
+	return c.and(), c.or()
 }
 
 func (c condition) String() string {
-	return fmt.Sprintf("%s %s %s %v %v", strings.Join(c.keyParts, "."), c.op, c.stringValue, c.nextAnd, c.nextOr)
+	return fmt.Sprintf("%s%s%s (%v,%v)", strings.Join(c.keyParts, "."), c.op, c.stringValue, c.nextAnd, c.nextOr)
 }
 
 // A ParseError describes the error that occurred while parsing. In addition, it
@@ -197,26 +193,73 @@ func (pe *parseError) Error() string {
 	return fmt.Sprintf("%s @ %d (%s)", pe.message, pe.position, pe.unparsable)
 }
 
-type Filter map[string][]Condition
+type Filter interface {
+	Get(k string) ([]Condition, bool)
+	GetFirst(k string) (Condition, bool)
+	GetLast(k string) (Condition, bool)
+	Len() int
+	FirstCondition() Condition
+	Conditions() Iterator[Condition]
+}
+
+type filter struct {
+	m     map[string][]Condition
+	first Condition
+}
+
+// Get retrieves the conditions for a given key.
+func (f filter) Get(k string) ([]Condition, bool) {
+	cs, ok := f.m[k]
+	return cs, ok
+}
 
 // GetFirst retrieves the first condition for a given key.
-func (f Filter) GetFirst(k string) (Condition, bool) {
-	cs := f[k]
-	// empty lists can exist, go beyond nil check
-	if len(cs) > 0 {
+func (f filter) GetFirst(k string) (Condition, bool) {
+	if cs := f.m[k]; cs != nil {
 		return cs[0], true
 	}
 	return nil, false
 }
 
 // GetLast retrieves the last condition for a given key.
-func (f Filter) GetLast(k string) (Condition, bool) {
-	cs := f[k]
-	// empty lists can exist, go beyond nil check
-	if l := len(cs); l > 0 {
-		return cs[l-1], true
+func (f filter) GetLast(k string) (Condition, bool) {
+	if cs := f.m[k]; cs != nil {
+		return cs[len(cs)-1], true
 	}
 	return nil, false
+}
+
+// Len returns the number of keys in the filter (not the number of conditions!).
+func (f filter) Len() int {
+	return len(f.m)
+}
+
+// FirstCondition returns the first condition in the filter.
+func (f filter) FirstCondition() Condition {
+	return f.first
+}
+
+// Conditions returns an iterator that iterates over all conditions in the
+// filter, starting with the first.
+func (f filter) Conditions() Iterator[Condition] {
+	return ForFunc[Condition](func(ch chan<- Condition, errCh chan<- error) {
+		defer close(ch)
+		defer close(errCh)
+		c := f.FirstCondition()
+		if c == nil {
+			return
+		}
+		ch <- c
+		for and, or := c.AndOr(); and != nil || or != nil; {
+			if and != nil {
+				ch <- and
+				and, or = and.AndOr()
+			} else if or != nil {
+				ch <- or
+				and, or = or.AndOr()
+			}
+		}
+	})
 }
 
 type filterParser struct {
@@ -240,7 +283,7 @@ func NewParser(options ...Option) FilterParser {
 // Parse parses a filter string into a Filter.
 func (p *filterParser) Parse(s string) (Filter, ParseError) {
 	if len(s) == 0 {
-		return make(map[string][]Condition, 0), nil
+		return filter{}, nil
 	}
 	filter, _, err := p.parseConditions(s, 0)
 	if err != nil {
@@ -256,32 +299,32 @@ const (
 	quote           = '"'
 )
 
-func (p *filterParser) parseConditions(s string, start int) (map[string][]Condition, int, ParseError) {
+func (p *filterParser) parseConditions(s string, start int) (filter, int, ParseError) {
 	cond, i, err := p.parseCondition(s, start)
 	if err != nil {
-		return nil, i, err
+		return filter{}, i, err
 	}
-	m := make(map[string][]Condition)
+	f := filter{make(map[string][]Condition), cond}
 	if i == len(s) {
-		m[cond.key] = []Condition{cond}
-		return m, i, nil
+		f.m[cond.key] = []Condition{cond}
+		return f, i, nil
 	}
 	prev := cond
 	for i < len(s) {
 		_, i, err = parseSeparator(s, i)
 		if err != nil {
-			return nil, i, err
+			return filter{}, i, err
 		}
 		cond, i, err = p.parseCondition(s, i)
 		if err != nil {
-			return nil, i, err
+			return filter{}, i, err
 		}
 		prev.nextAnd = &cond
-		m[prev.key] = append(m[prev.key], prev)
+		f.m[prev.key] = append(f.m[prev.key], prev)
 		prev = cond
 	}
-	m[prev.key] = append(m[prev.key], prev)
-	return m, start, nil
+	f.m[prev.key] = append(f.m[prev.key], prev)
+	return f, start, nil
 }
 
 func parseSeparator(s string, start int) (string, int, ParseError) {
