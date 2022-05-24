@@ -5,7 +5,6 @@
 package listfilter
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -70,72 +69,73 @@ func TestForMap(t *testing.T) {
 	}
 }
 
-func TestForFunc(t *testing.T) {
-	type args[T any] struct {
-		f func(chan<- T, chan<- error)
-	}
-	tests := []struct {
-		name    string
-		args    args[any]
-		want    []int
-		wantErr bool
-	}{
-		{
-			"simple",
-			args[any]{func(ch chan<- any, errCh chan<- error) {
-				defer close(ch)
-				defer close(errCh)
-				ch <- 3
-				ch <- 1
-				ch <- 2
-			}},
-			[]int{3, 1, 2},
-			false,
-		},
-		{
-			"error",
-			args[any]{func(ch chan<- any, errCh chan<- error) {
-				defer close(ch)
-				defer close(errCh)
-				ch <- 3
-				ch <- 1
-				errCh <- fmt.Errorf("oh noes")
-			}},
-			[]int{3, 1},
-			true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			it := ForFunc(tt.args.f)
-			for i := 0; ; i += 1 {
-				x, err := it.Next()
-				if err != nil && err != Done {
-					if got := err != nil; got != tt.wantErr {
-						t.Errorf("error %v != %v", tt.wantErr, got)
-					}
-					return
-				}
-				if i == len(tt.want) {
-					if x != nil {
-						t.Errorf("unexpected item %v", x)
-					}
-					return
-				}
-				if x != tt.want[i] {
-					t.Errorf("Expected %v @ %d\n, got      %v", tt.want[i], i, x)
-				}
-				if err == Done {
-					break
-				}
-			}
-			_, err := it.Next()
-			if err != Done {
-				t.Errorf("expected Done, got %v", err)
-			}
-		})
-	}
-}
+//
+//func TestForFunc(t *testing.T) {
+//	type args[T any] struct {
+//		f func(chan<- T, chan<- error)
+//	}
+//	tests := []struct {
+//		name    string
+//		args    args[any]
+//		want    []int
+//		wantErr bool
+//	}{
+//		{
+//			"simple",
+//			args[any]{func(ch chan<- any, errCh chan<- error) {
+//				defer close(ch)
+//				defer close(errCh)
+//				ch <- 3
+//				ch <- 1
+//				ch <- 2
+//			}},
+//			[]int{3, 1, 2},
+//			false,
+//		},
+//		{
+//			"error",
+//			args[any]{func(ch chan<- any, errCh chan<- error) {
+//				defer close(ch)
+//				defer close(errCh)
+//				ch <- 3
+//				ch <- 1
+//				errCh <- fmt.Errorf("oh noes")
+//			}},
+//			[]int{3, 1},
+//			true,
+//		},
+//	}
+//	for _, tt := range tests {
+//		t.Run(tt.name, func(t *testing.T) {
+//			it := ForFunc(tt.args.f)
+//			for i := 0; ; i += 1 {
+//				x, err := it.Next()
+//				if err != nil && err != Done {
+//					if got := err != nil; got != tt.wantErr {
+//						t.Errorf("error %v != %v", tt.wantErr, got)
+//					}
+//					return
+//				}
+//				if i == len(tt.want) {
+//					if x != nil {
+//						t.Errorf("unexpected item %v", x)
+//					}
+//					return
+//				}
+//				if x != tt.want[i] {
+//					t.Errorf("Expected %v @ %d\n, got      %v", tt.want[i], i, x)
+//				}
+//				if err == Done {
+//					break
+//				}
+//			}
+//			_, err := it.Next()
+//			if err != Done {
+//				t.Errorf("expected Done, got %v", err)
+//			}
+//		})
+//	}
+//}
 
 func TestForSlice(t *testing.T) {
 	type args[T any] struct {

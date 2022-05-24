@@ -242,22 +242,37 @@ func (f filter) FirstCondition() Condition {
 // Conditions returns an iterator that iterates over all conditions in the
 // filter, starting with the first.
 func (f filter) Conditions() Iterator[Condition] {
-	return ForFunc[Condition](func(ch chan<- Condition, errCh chan<- error) {
-		defer close(ch)
-		defer close(errCh)
-		c := f.FirstCondition()
-		if c == nil {
-			return
+	var cs []Condition
+	c := f.FirstCondition()
+	if c == nil {
+		return Empty[Condition]()
+	}
+	cs = append(cs, c)
+
+	for and, or := c.AndOr(); and != nil || or != nil; and, or = c.AndOr() {
+		if and != nil {
+			c = and
+		} else if or != nil {
+			c = or
 		}
+		cs = append(cs, c)
+	}
+
+	ch := make(chan Condition, len(cs))
+	for _, c := range cs {
 		ch <- c
-		for and, or := c.AndOr(); and != nil || or != nil; {
-			if and != nil {
-				ch <- and
-				and, or = and.AndOr()
-			} else if or != nil {
-				ch <- or
-				and, or = or.AndOr()
+	}
+	close(ch)
+
+	return ForFunc[Condition](func() (Condition, error) {
+		select {
+		case v, ok := <-ch:
+			if !ok {
+				return nil, Done
 			}
+			return v, nil
+		default:
+			return nil, Done
 		}
 	})
 }
