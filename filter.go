@@ -60,6 +60,8 @@ type Condition interface {
 	IntValue() (int, error)
 	BoolValue() (bool, error)
 	FloatValue() (float64, error)
+	And() Condition
+	Or() Condition
 	AndOr() (Condition, Condition)
 }
 
@@ -130,14 +132,16 @@ func (c condition) FloatValue() (float64, error) {
 	return f, nil
 }
 
-func (c condition) and() Condition {
+// And returns the next AND Condition, if there is one, nil otherwise.
+func (c condition) And() Condition {
 	if c.nextAnd == (*condition)(nil) {
 		return nil
 	}
 	return c.nextAnd
 }
 
-func (c condition) or() Condition {
+// Or returns the next OR Condition, if there is one, nil otherwise.
+func (c condition) Or() Condition {
 	if c.nextOr == (*condition)(nil) {
 		return nil
 	}
@@ -147,7 +151,7 @@ func (c condition) or() Condition {
 // AndOr returns the next condition in the filter. It returns a tuple; the
 // first points to an AND condition, the second to an OR.
 func (c condition) AndOr() (Condition, Condition) {
-	return c.and(), c.or()
+	return c.And(), c.Or()
 }
 
 func (c condition) String() string {
@@ -199,7 +203,7 @@ type Filter interface {
 	GetLast(k string) (Condition, bool)
 	Len() int
 	FirstCondition() Condition
-	Conditions() Iterator[Condition]
+	Conditions() []Condition
 }
 
 type filter struct {
@@ -239,42 +243,25 @@ func (f filter) FirstCondition() Condition {
 	return f.first
 }
 
-// Conditions returns an iterator that iterates over all conditions in the
-// filter, starting with the first.
-func (f filter) Conditions() Iterator[Condition] {
-	var cs []Condition
+// Conditions returns all conditions by order of appearance.
+func (f filter) Conditions() []Condition {
 	c := f.FirstCondition()
 	if c == nil {
-		return Empty[Condition]()
+		return nil
 	}
-	cs = append(cs, c)
-
-	for and, or := c.AndOr(); and != nil || or != nil; and, or = c.AndOr() {
+	var cs []Condition
+	for {
+		cs = append(cs, c)
+		and, or := c.AndOr()
 		if and != nil {
 			c = and
 		} else if or != nil {
 			c = or
+		} else {
+			break
 		}
-		cs = append(cs, c)
 	}
-
-	ch := make(chan Condition, len(cs))
-	for _, c := range cs {
-		ch <- c
-	}
-	close(ch)
-
-	return ForFunc[Condition](func() (Condition, error) {
-		select {
-		case v, ok := <-ch:
-			if !ok {
-				return nil, Done
-			}
-			return v, nil
-		default:
-			return nil, Done
-		}
-	})
+	return cs
 }
 
 type filterParser struct {

@@ -396,28 +396,15 @@ func TestFilter_Conditions(t *testing.T) {
 				m:     tt.fields.m,
 				first: tt.fields.first,
 			}
-			var xs []Condition
-			it := f.Conditions()
-			for {
-				c, err := it.Next()
-				if err != nil && err != Done {
-					t.Errorf("unexpected error %s", err)
-				}
-				if c != nil {
-					xs = append(xs, c)
-				}
-				if err == Done {
-					break
-				}
-			}
+			got := f.Conditions()
 			i := 0
-			for ; i < len(xs) && i < len(tt.want); i += 1 {
-				if !conditionsEqual(xs[i], tt.want[i]) {
-					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, xs)
+			for ; i < len(got) && i < len(tt.want); i += 1 {
+				if !conditionsEqual(got[i], tt.want[i]) {
+					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, got)
 				}
 			}
-			if i < len(xs) {
-				t.Errorf("unexpectd conditions %v", xs[i:])
+			if i < len(got) {
+				t.Errorf("unexpectd conditions %v", got[i:])
 			}
 			if i < len(tt.want) {
 				t.Errorf("missing %v", tt.want[i:])
