@@ -6,7 +6,7 @@
 Package listfilter implements a query parser and the resulting filter as used in
 List and Search requests.
 
-Syntax and semantics are reverse engineered from:
+Syntax and semantics are reverse engineered (and expanded upon) from:
 https://cloud.google.com/service-infrastructure/docs/service-consumer-management/reference/rest/v1/services/search#query-parameters
 
 Examples of filter strings:
@@ -15,12 +15,14 @@ Examples of filter strings:
   "foo.bar=bla"
   "foo=bar AND bla=vla"
   "foo>bar AND foo=bar"
+  "foo>bar AND foo=bar OR moo=boo"
 
 The filter string should adher to the following grammar:
 
   Filter =        <nil> | Conditions
   Conditions =    Condition { Separator Conditions }
-  Separator =     Space 'AND' Space
+  Separator =     Space SeparatorToken Space
+  SeparatorToken  'AND' | 'OR'
   Condition =     FullName Operator Value
   FullName =      NameParts
   NameParts =     Name | Name NameSeparator NameParts
@@ -45,9 +47,9 @@ import (
 	"unicode/utf8"
 )
 
-// A FilterParser parses a filter string into a Filter. If parsing fails, a
+// A Parser parses a filter string into a Filter. If parsing fails, a
 // ParseError is returned and the Filter will be nil.
-type FilterParser interface {
+type Parser interface {
 	Parse(s string) (Filter, ParseError)
 }
 
@@ -155,7 +157,15 @@ func (c condition) AndOr() (Condition, Condition) {
 }
 
 func (c condition) String() string {
-	return fmt.Sprintf("%s%s%s (%v,%v)", strings.Join(c.keyParts, "."), c.op, c.stringValue, c.nextAnd, c.nextOr)
+	and := ""
+	or := ""
+	if c.nextAnd != nil {
+		and = c.nextAnd.key
+	}
+	if c.nextOr != nil {
+		or = c.nextOr.key
+	}
+	return fmt.Sprintf("%s%s%s (%q,%q)", c.key, c.op, c.stringValue, and, or)
 }
 
 // A ParseError describes the error that occurred while parsing. In addition, it
@@ -201,14 +211,34 @@ type Filter interface {
 	Get(k string) ([]Condition, bool)
 	GetFirst(k string) (Condition, bool)
 	GetLast(k string) (Condition, bool)
+	Keys() []string
+	Values() []Condition
 	Len() int
-	FirstCondition() Condition
+	First() Condition
 	Conditions() []Condition
 }
 
 type filter struct {
 	m     map[string][]Condition
 	first Condition
+}
+
+func (f filter) Keys() []string {
+	var ks []string
+	for k := range f.m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
+func (f filter) Values() []Condition {
+	var ys []Condition
+	for _, xs := range f.m {
+		for _, x := range xs {
+			ys = append(ys, x)
+		}
+	}
+	return ys
 }
 
 // Get retrieves the conditions for a given key.
@@ -238,14 +268,14 @@ func (f filter) Len() int {
 	return len(f.m)
 }
 
-// FirstCondition returns the first condition in the filter.
-func (f filter) FirstCondition() Condition {
+// First returns the first condition in the filter.
+func (f filter) First() Condition {
 	return f.first
 }
 
 // Conditions returns all conditions by order of appearance.
 func (f filter) Conditions() []Condition {
-	c := f.FirstCondition()
+	c := f.First()
 	if c == nil {
 		return nil
 	}
@@ -264,15 +294,15 @@ func (f filter) Conditions() []Condition {
 	return cs
 }
 
-type filterParser struct {
+type parser struct {
 	ops       map[string]bool
 	snakeCase bool
 	camelCase bool
 }
 
-// NewParser creates a new FilterParser.
-func NewParser(options ...Option) FilterParser {
-	f := &filterParser{ops: map[string]bool{"=": true, "!=": true}}
+// NewParser creates a new Parser.
+func NewParser(options ...Option) Parser {
+	f := &parser{ops: map[string]bool{"=": true, "!=": true}}
 	for _, opt := range options {
 		opt.Apply(f)
 	}
@@ -283,25 +313,24 @@ func NewParser(options ...Option) FilterParser {
 }
 
 // Parse parses a filter string into a Filter.
-func (p *filterParser) Parse(s string) (Filter, ParseError) {
+func (p *parser) Parse(s string) (Filter, ParseError) {
 	if len(s) == 0 {
 		return filter{}, nil
 	}
-	filter, _, err := p.parseConditions(s, 0)
+	f, _, err := p.parseConditions(s, 0)
 	if err != nil {
 		return nil, err
 	}
-	return filter, nil
+	return f, nil
 }
 
 const (
-	separator       = "AND"
 	nameSeparator   = '.'
 	escapeCharacter = '\\'
 	quote           = '"'
 )
 
-func (p *filterParser) parseConditions(s string, start int) (filter, int, ParseError) {
+func (p *parser) parseConditions(s string, start int) (filter, int, ParseError) {
 	cond, i, err := p.parseCondition(s, start)
 	if err != nil {
 		return filter{}, i, err
@@ -313,7 +342,8 @@ func (p *filterParser) parseConditions(s string, start int) (filter, int, ParseE
 	}
 	prev := cond
 	for i < len(s) {
-		_, i, err = parseSeparator(s, i)
+		var sep string
+		sep, i, err = parseSeparator(s, i)
 		if err != nil {
 			return filter{}, i, err
 		}
@@ -321,7 +351,11 @@ func (p *filterParser) parseConditions(s string, start int) (filter, int, ParseE
 		if err != nil {
 			return filter{}, i, err
 		}
-		prev.nextAnd = &cond
+		if sep == "AND" {
+			prev.nextAnd = &cond
+		} else {
+			prev.nextOr = &cond
+		}
 		f.m[prev.key] = append(f.m[prev.key], prev)
 		prev = cond
 	}
@@ -329,30 +363,36 @@ func (p *filterParser) parseConditions(s string, start int) (filter, int, ParseE
 	return f, start, nil
 }
 
-func parseSeparator(s string, start int) (string, int, ParseError) {
+func spaceOrNonSpace(s string, start int, space bool) int {
 	i := start
-	for ; i < len(s) && unicode.IsSpace(rune(s[i])); i += 1 {
+	for i < len(s) {
+		r, width := utf8.DecodeRuneInString(s[i:])
+		if unicode.IsSpace(r) != space {
+			return i
+		}
+		i += width
 	}
+	return i
+}
+
+func parseSeparator(s string, start int) (string, int, ParseError) {
+	i := spaceOrNonSpace(s, start, true)
 	if i == start {
 		return "", i, NewParseError("expected a whitespace", i, s[i:])
 	}
-	if len(s) < i+len(separator) {
-		return "", i, NewParseError("expected AND", i, s[i:])
-	}
-	j := i + len(separator)
+	j := spaceOrNonSpace(s, i, false)
 	sep := s[i:j]
-	if sep != separator {
-		return "", i, NewParseError("expected AND", i, s[i:])
+	if !(sep == "AND" || sep == "OR") {
+		return "", i, NewParseError("expected a condition separator (AND, OR)", i, s[i:])
 	}
-	for ; j < len(s) && unicode.IsSpace(rune(s[j])); j += 1 {
+	k := spaceOrNonSpace(s, j, true)
+	if k == j {
+		return "", k, NewParseError("expected a whitespace", k, s[k:])
 	}
-	if j == i {
-		return "", j, NewParseError("expected a whitespace", j, s[j:])
-	}
-	return sep, j, nil
+	return sep, k, nil
 }
 
-func (p *filterParser) parseCondition(s string, start int) (condition, int, ParseError) {
+func (p *parser) parseCondition(s string, start int) (condition, int, ParseError) {
 	key, keyParts, i, err := p.parseFullName(s, start)
 	if err != nil {
 		return condition{}, i, err
@@ -368,7 +408,7 @@ func (p *filterParser) parseCondition(s string, start int) (condition, int, Pars
 	return condition{key, keyParts, op, value, nil, nil}, i, nil
 }
 
-func (p *filterParser) parseFullName(s string, start int) (string, []string, int, ParseError) {
+func (p *parser) parseFullName(s string, start int) (string, []string, int, ParseError) {
 	parts, i, err := p.parseNameParts(s, start)
 	if err != nil {
 		return "", nil, i, err
@@ -376,7 +416,7 @@ func (p *filterParser) parseFullName(s string, start int) (string, []string, int
 	return strings.Join(parts, string(nameSeparator)), parts, i, nil
 }
 
-func (p *filterParser) parseNameParts(s string, start int) ([]string, int, ParseError) {
+func (p *parser) parseNameParts(s string, start int) ([]string, int, ParseError) {
 	part, i, err := p.parseName(s, start)
 	if err != nil {
 		return nil, i, err
@@ -393,7 +433,7 @@ func (p *filterParser) parseNameParts(s string, start int) ([]string, int, Parse
 	return parts, i, nil
 }
 
-func (p *filterParser) parseName(s string, start int) (string, int, ParseError) {
+func (p *parser) parseName(s string, start int) (string, int, ParseError) {
 	if len(s) == start {
 		return "", start, NewParseError("unexpected end of string, expected a name", start, s[start:])
 	}
@@ -422,7 +462,7 @@ func (p *filterParser) parseName(s string, start int) (string, int, ParseError) 
 	return s[start:i], i, nil
 }
 
-func (p *filterParser) parseOperator(s string, start int) (string, int, ParseError) {
+func (p *parser) parseOperator(s string, start int) (string, int, ParseError) {
 	i := start
 	for i < len(s) {
 		i += 1
@@ -433,7 +473,7 @@ func (p *filterParser) parseOperator(s string, start int) (string, int, ParseErr
 	return "", i, NewParseError("expected operator", start, s[start:])
 }
 
-func (p *filterParser) parseValue(s string, start int) (string, int, ParseError) {
+func (p *parser) parseValue(s string, start int) (string, int, ParseError) {
 	if start == len(s) {
 		return "", start, nil
 	}
@@ -443,20 +483,12 @@ func (p *filterParser) parseValue(s string, start int) (string, int, ParseError)
 	return p.parseNormalValue(s, start)
 }
 
-func (p *filterParser) parseNormalValue(s string, start int) (string, int, ParseError) {
-	i := start
-	w := 0
-	for ; i < len(s); i += w {
-		r, width := utf8.DecodeRuneInString(s[i:])
-		if unicode.IsSpace(r) {
-			break
-		}
-		w = width
-	}
+func (p *parser) parseNormalValue(s string, start int) (string, int, ParseError) {
+	i := spaceOrNonSpace(s, start, false)
 	return s[start:i], i, nil
 }
 
-func (p *filterParser) parseQuotedValue(s string, start int) (string, int, ParseError) {
+func (p *parser) parseQuotedValue(s string, start int) (string, int, ParseError) {
 	i := start + 1
 	v, i, err := p.parseQuotesEscaped(s, i)
 	if err != nil {
@@ -468,7 +500,7 @@ func (p *filterParser) parseQuotedValue(s string, start int) (string, int, Parse
 	return v, i + 1, nil
 }
 
-func (p *filterParser) parseQuotesEscaped(s string, start int) (string, int, ParseError) {
+func (p *parser) parseQuotesEscaped(s string, start int) (string, int, ParseError) {
 	sb := strings.Builder{}
 	i := start
 	escape := false
@@ -496,20 +528,20 @@ func (p *filterParser) parseQuotesEscaped(s string, start int) (string, int, Par
 	return sb.String(), i, nil
 }
 
-// An Option that can be passed to the FilterParser factory method.
+// An Option that can be passed to the Parser factory method.
 type Option interface {
-	Apply(parser *filterParser)
+	Apply(parser *parser)
 }
 
 type optionSnakeCase struct{}
 
-func (o optionSnakeCase) Apply(parser *filterParser) {
+func (o optionSnakeCase) Apply(parser *parser) {
 	parser.snakeCase = true
 }
 
 // OptionSnakeCase will instruct the parser to make a best-effort attempt at
 // converting field names to snake_case. Cannot be used along with
-//OptionCamelCase.
+// OptionCamelCase.
 // When an uppercase character is encountered, it will be lower-cased. It will
 // be prefixed with an underscore, unless it is the starting character, preceded
 // by another uppercase character, or preceded by an underscore.
@@ -519,7 +551,7 @@ func OptionSnakeCase() Option {
 
 type optionCamelCase struct{}
 
-func (o optionCamelCase) Apply(parser *filterParser) {
+func (o optionCamelCase) Apply(parser *parser) {
 	parser.camelCase = true
 }
 

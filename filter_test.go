@@ -54,7 +54,8 @@ func Test_filterParser_Parse(t *testing.T) {
 	type args struct {
 		s string
 	}
-	standardFields := fields{ops: NewParser().(*filterParser).ops}
+	standardFields := fields{ops: NewParser().(*parser).ops}
+	dummy := &condition{key: "dummy"}
 	tests := []struct {
 		name    string
 		fields  fields
@@ -144,7 +145,6 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar AND\n\tbla=vla   AND moo=boo"},
 			func() map[string][]Condition {
-				dummy := &condition{}
 				return map[string][]Condition{
 					"foo": {condition{"foo", []string{"foo"}, "=", "bar", dummy, nil}},
 					"bla": {condition{"bla", []string{"bla"}, "=", "vla", dummy, nil}},
@@ -154,11 +154,23 @@ func Test_filterParser_Parse(t *testing.T) {
 			nil,
 		},
 		{
+			"multiple conditions with OR",
+			standardFields,
+			args{s: "foo=bar AND\n\tbla=vla   OR moo=boo"},
+			func() map[string][]Condition {
+				return map[string][]Condition{
+					"foo": {condition{"foo", []string{"foo"}, "=", "bar", dummy, nil}},
+					"bla": {condition{"bla", []string{"bla"}, "=", "vla", nil, dummy}},
+					"moo": {condition{"moo", []string{"moo"}, "=", "boo", nil, nil}},
+				}
+			}(),
+			nil,
+		},
+		{
 			"multiple conditions and snake_case",
-			fields{ops: NewParser().(*filterParser).ops, snakeCase: true},
+			fields{ops: NewParser().(*parser).ops, snakeCase: true},
 			args{s: "fooBar=fooBar AND\n\tblaVla=bla_vla   AND mo_O=boo"},
 			func() map[string][]Condition {
-				dummy := &condition{}
 				return map[string][]Condition{
 					"foo_bar": {condition{"foo_bar", []string{"foo_bar"}, "=", "fooBar", dummy, nil}},
 					"bla_vla": {condition{"bla_vla", []string{"bla_vla"}, "=", "bla_vla", dummy, nil}},
@@ -169,7 +181,7 @@ func Test_filterParser_Parse(t *testing.T) {
 		},
 		{
 			"multiple conditions and camelCase",
-			fields{ops: NewParser().(*filterParser).ops, camelCase: true},
+			fields{ops: NewParser().(*parser).ops, camelCase: true},
 			args{s: "foo_Bar=foo_Bar AND\n\tBla_vla=bla_vla   AND mo_O=boo"},
 			func() map[string][]Condition {
 				dummy := &condition{}
@@ -306,7 +318,7 @@ func Test_filterParser_Parse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &filterParser{
+			p := &parser{
 				ops:       tt.fields.ops,
 				snakeCase: tt.fields.snakeCase,
 				camelCase: tt.fields.camelCase,
@@ -322,13 +334,15 @@ func Test_filterParser_Parse(t *testing.T) {
 				t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
 			}
 
-			//for k := range got {
-			//	for i := range got[k] {
-			//		if !conditionsEqual(got[k][i].(condition), tt.want[k][i].(condition)) {
-			//			t.Errorf("\nExpected: %v,\ngot:      %v", tt.want, got)
-			//		}
-			//	}
-			//}
+			for _, k := range got.Keys() {
+				vs, _ := got.Get(k)
+				for i, v := range vs {
+					want := tt.want[k][i].(condition)
+					if !conditionsEqual(v.(condition), want) {
+						t.Errorf("\nExpected: %s,\ngot:      %s", want, v)
+					}
+				}
+			}
 		})
 	}
 }
@@ -344,7 +358,11 @@ func createCondition(i int) condition {
 	return condition{key, []string{key}, "=", val, nil, nil}
 }
 
-func createFields(n int) filterFields {
+func createFields(n int, or ...int) filterFields {
+	isOr := make(map[int]bool)
+	for _, idx := range or {
+		isOr[idx] = true
+	}
 	fs := filterFields{
 		m: make(map[string][]Condition),
 	}
@@ -357,7 +375,11 @@ func createFields(n int) filterFields {
 	}
 	for i := 1; i < n; i += 1 {
 		c := createCondition(i)
-		prev.nextAnd = &c
+		if isOr[i] {
+			prev.nextOr = &c
+		} else {
+			prev.nextAnd = &c
+		}
 		if i == 1 {
 			fs.first = prev
 		}
@@ -368,12 +390,20 @@ func createFields(n int) filterFields {
 	return fs
 }
 
-func createWant(n int) []condition {
+func createWant(n int, or ...int) []condition {
+	isOr := make(map[int]bool)
+	for _, idx := range or {
+		isOr[idx] = true
+	}
 	var cs []condition
 	for i := 0; i < n; i += 1 {
 		c := createCondition(i)
 		if len(cs) > 0 {
-			cs[i-1].nextAnd = &c
+			if isOr[i] {
+				cs[i-1].nextOr = &c
+			} else {
+				cs[i-1].nextAnd = &c
+			}
 		}
 		cs = append(cs, c)
 	}
@@ -389,6 +419,7 @@ func TestFilter_Conditions(t *testing.T) {
 		{"empty", createFields(0), []condition{}},
 		{"single", createFields(1), createWant(1)},
 		{"double", createFields(2), createWant(2)},
+		{"double OR", createFields(2, 1), createWant(2, 1)},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,7 +457,7 @@ func TestCondition_AndOr(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			f := filter{tt.fields.m, tt.fields.first}
-			c := f.FirstCondition()
+			c := f.First()
 			if c == nil {
 				if len(tt.want) != 0 {
 					t.Errorf("No first condition in %v", f)
