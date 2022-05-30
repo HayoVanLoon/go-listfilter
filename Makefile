@@ -1,6 +1,10 @@
 
 TMP_DIR=tmp
 
+test:
+	go test	\
+		-bench . \
+		-race
 
 profile:
 	mkdir -p $(TMP_DIR)
