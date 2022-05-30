@@ -4,57 +4,6 @@
 
 A library for parsing filter expressions as found in list and search web calls.
 
-Examples of filter strings:
-
-```text
-  "foo=bar"
-  "foo.bar=bla"
-  "foo=bar AND bla=vla"
-  "foo>bar AND foo=bar"
-```
-
-The filter string should adher to the following grammar:
-
-```text
-Filter:
-      <nil>
-      Conditions
-  Conditions:
-      Condition { Separator Conditions }
-  Separator:
- 	 Space 'AND' Space
-  Condition:
-      FullName Operator Value
-  FullName:
-      NameParts
-  NameParts:
-      Name
-      Name NameSeparator NameParts
-  NameSeparator:
-      '.'
-  Name:
-      regex([a-zA-Z][a-zA-Z0-9_]*)
-  Operator:
-      regex([^a-zA-Z0-9_].*)
-  Value
-      NormalValue | QuotedValue
-  NormalValue
-      regex([^separator\s]*)
-  QuotedValue
-      '"' Escaped '"'
-  Escaped
-      <nil>
-      NormalChar Escaped
-      EscapedChar Escaped
-  EscapedChar
-      '\\'
-      '\"'
-  NormalChar
-      <not eChar>
-```
-
-An empty string is considered a valid input and will result in an empty Filter.
-
 # License
 
 Copyright 2022 Hayo van Loon
