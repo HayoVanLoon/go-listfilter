@@ -1,3 +1,14 @@
+# v0.4.0
+
+* Use built-in error interface instead of custom interface.
+* Fixed bug that lead to broken condition chains.
+* Lifted documentation from private implementation to public interface
+* Filter now has a String method that will reconstruct the filter string (with cleaning)
+
+## Breaking Changes
+
+* Made `ParseError` factory method private.
+
 # v0.3.0
 
 ## Breaking Changes

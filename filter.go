@@ -47,23 +47,40 @@ import (
 	"unicode/utf8"
 )
 
-// A Parser parses a filter string into a Filter. If parsing fails, a
-// ParseError is returned and the Filter will be nil.
+// A Parser parses a filter string into a Filter. If parsing fails, an error is
+// returned and the Filter will be nil. The error will be a ParseError, which
+// has methods for diagnosing the parsing failure.
 type Parser interface {
-	Parse(s string) (Filter, ParseError)
+	// Parse parses a filter string into a Filter.
+	Parse(s string) (Filter, error)
 }
 
 // Condition stores a filter condition.
 type Condition interface {
+	// Key returns the condition's key.
 	Key() string
+	// KeyParts returns the condition's key part list, which has at least one item.
 	KeyParts() []string
+	// Op returns the condition's operator as a string.
 	Op() string
+	// StringValue returns the raw string value of the condition.
 	StringValue() string
+	// IntValue is a convenience function for getting a filter condition value as an
+	// integer. If the value is not an integer, an error is returned.
 	IntValue() (int, error)
+	// BoolValue is a convenience function for getting a filter condition value as
+	// a boolean. If the value is not a strict boolean (case-insensitive 'true' or
+	// 'false'), an error is returned.
 	BoolValue() (bool, error)
+	// FloatValue is a convenience function for getting a filter condition value as
+	// a 64-bit float. If the value is not a float, an error is returned.
 	FloatValue() (float64, error)
+	// And returns the next AND Condition, if there is one, nil otherwise.
 	And() Condition
+	// Or returns the next OR Condition, if there is one, nil otherwise.
 	Or() Condition
+	// AndOr returns the next condition in the filter. It returns a tuple; the
+	// first points to an AND condition, the second to an OR.
 	AndOr() (Condition, Condition)
 }
 
@@ -81,28 +98,22 @@ func NewCondition(key string, keyParts []string, op, stringValue string) Conditi
 	return condition{key, keyParts, op, stringValue, nil, nil}
 }
 
-// Key returns the condition's key.
 func (c condition) Key() string {
 	return c.key
 }
 
-// KeyParts returns the condition's key part list, which has at least one item.
 func (c condition) KeyParts() []string {
 	return c.keyParts
 }
 
-// Op returns the condition's operator as a string.
 func (c condition) Op() string {
 	return c.op
 }
 
-// StringValue returns the raw string value of the condition.
 func (c condition) StringValue() string {
 	return c.stringValue
 }
 
-// IntValue is a convenience function for getting a filter condition value as an
-// integer. If the value is not an integer, an error is returned.
 func (c condition) IntValue() (int, error) {
 	i, err := strconv.Atoi(c.stringValue)
 	if err != nil {
@@ -111,9 +122,6 @@ func (c condition) IntValue() (int, error) {
 	return i, nil
 }
 
-// BoolValue is a convenience function for getting a filter condition value as
-// a boolean. If the value is not a strict boolean (case-insensitive 'true' or
-// 'false'), an error is returned.
 func (c condition) BoolValue() (bool, error) {
 	switch strings.ToLower(c.stringValue) {
 	case "true":
@@ -124,8 +132,6 @@ func (c condition) BoolValue() (bool, error) {
 	return false, fmt.Errorf("%s is not a valid boolean", c.stringValue)
 }
 
-// FloatValue is a convenience function for getting a filter condition value as
-// a 64-bit float. If the value is not a float, an error is returned.
 func (c condition) FloatValue() (float64, error) {
 	f, err := strconv.ParseFloat(c.stringValue, 64)
 	if err != nil {
@@ -134,7 +140,6 @@ func (c condition) FloatValue() (float64, error) {
 	return f, nil
 }
 
-// And returns the next AND Condition, if there is one, nil otherwise.
 func (c condition) And() Condition {
 	if c.nextAnd == (*condition)(nil) {
 		return nil
@@ -142,7 +147,6 @@ func (c condition) And() Condition {
 	return c.nextAnd
 }
 
-// Or returns the next OR Condition, if there is one, nil otherwise.
 func (c condition) Or() Condition {
 	if c.nextOr == (*condition)(nil) {
 		return nil
@@ -150,30 +154,23 @@ func (c condition) Or() Condition {
 	return c.nextOr
 }
 
-// AndOr returns the next condition in the filter. It returns a tuple; the
-// first points to an AND condition, the second to an OR.
 func (c condition) AndOr() (Condition, Condition) {
 	return c.And(), c.Or()
 }
 
 func (c condition) String() string {
-	and := ""
-	or := ""
-	if c.nextAnd != nil {
-		and = c.nextAnd.key
-	}
-	if c.nextOr != nil {
-		or = c.nextOr.key
-	}
-	return fmt.Sprintf("%s%s%s (%q,%q)", c.key, c.op, c.stringValue, and, or)
+	return fmt.Sprintf("%s%s%s", c.key, c.op, c.stringValue)
 }
 
 // A ParseError describes the error that occurred while parsing. In addition, it
 // provides details to help pinpoint the error.
 type ParseError interface {
 	error
+	// Message provides a user-friendly error message.
 	Message() string
+	// Position returns the position in the string at which parsing failed.
 	Position() int
+	// Unparsable returns the part of the string from which parsing failed.
 	Unparsable() string
 }
 
@@ -183,22 +180,19 @@ type parseError struct {
 	unparsable string
 }
 
-// NewParseError returns a new ParseError with the specified parameters.
-func NewParseError(message string, position int, unparsable string) ParseError {
+// newParseError returns a new ParseError with the specified parameters.
+func newParseError(message string, position int, unparsable string) error {
 	return &parseError{message, position, unparsable}
 }
 
-// Message provides a user-friendly error message.
 func (pe *parseError) Message() string {
 	return pe.message
 }
 
-// Position returns the position in the string at which parsing failed.
 func (pe *parseError) Position() int {
 	return pe.position
 }
 
-// Unparsable returns the part of the string from which parsing failed.
 func (pe *parseError) Unparsable() string {
 	return pe.unparsable
 }
@@ -207,20 +201,37 @@ func (pe *parseError) Error() string {
 	return fmt.Sprintf("%s @ %d (%s)", pe.message, pe.position, pe.unparsable)
 }
 
+// A Filter is a container for filter conditions as parsed by the Parser.
 type Filter interface {
+	// Get retrieves the conditions for a given key.
 	Get(k string) ([]Condition, bool)
+	// GetFirst retrieves the first condition for a given key.
 	GetFirst(k string) (Condition, bool)
+	// GetLast retrieves the last condition for a given key.
 	GetLast(k string) (Condition, bool)
+	// Keys returns all Condition keys found in the filter.
 	Keys() []string
+	// Values returns every Condition found in the filter. Other than that
+	// conditions are grouped in blocks with the same key, there are no guarantees
+	// on ordering. If for instance insertion order is required, use Conditions.
 	Values() []Condition
+	// Len returns the number of keys in the filter. This is may be less than
+	// the total number of conditions.
 	Len() int
+	// First returns the first condition (as encountered in the original string).
+	// Starting from this Condition and moving through its Condition.AndOr method
+	// will allow reconstruction of the original filter string.
 	First() Condition
+	// Conditions returns all conditions by order of appearance in the original
+	// filter string.
 	Conditions() []Condition
+
+	fmt.Stringer
 }
 
 type filter struct {
 	m     map[string][]Condition
-	first Condition
+	first *condition
 }
 
 func (f filter) Keys() []string {
@@ -241,13 +252,11 @@ func (f filter) Values() []Condition {
 	return ys
 }
 
-// Get retrieves the conditions for a given key.
 func (f filter) Get(k string) ([]Condition, bool) {
 	cs, ok := f.m[k]
 	return cs, ok
 }
 
-// GetFirst retrieves the first condition for a given key.
 func (f filter) GetFirst(k string) (Condition, bool) {
 	if cs := f.m[k]; cs != nil {
 		return cs[0], true
@@ -255,7 +264,6 @@ func (f filter) GetFirst(k string) (Condition, bool) {
 	return nil, false
 }
 
-// GetLast retrieves the last condition for a given key.
 func (f filter) GetLast(k string) (Condition, bool) {
 	if cs := f.m[k]; cs != nil {
 		return cs[len(cs)-1], true
@@ -263,20 +271,17 @@ func (f filter) GetLast(k string) (Condition, bool) {
 	return nil, false
 }
 
-// Len returns the number of keys in the filter (not the number of conditions!).
 func (f filter) Len() int {
 	return len(f.m)
 }
 
-// First returns the first condition in the filter.
 func (f filter) First() Condition {
 	return f.first
 }
 
-// Conditions returns all conditions by order of appearance.
 func (f filter) Conditions() []Condition {
 	c := f.First()
-	if c == nil {
+	if c == (*condition)(nil) {
 		return nil
 	}
 	var cs []Condition
@@ -292,6 +297,28 @@ func (f filter) Conditions() []Condition {
 		}
 	}
 	return cs
+}
+
+func (f filter) String() string {
+	b := strings.Builder{}
+	c := f.First()
+	if c == (*condition)(nil) {
+		return b.String()
+	}
+	for {
+		b.WriteString(c.(*condition).String())
+		and, or := c.AndOr()
+		if and != nil {
+			b.WriteString(" " + separatorAnd + " ")
+			c = and
+		} else if or != nil {
+			b.WriteString(" " + separatorOr + " ")
+			c = or
+		} else {
+			break
+		}
+	}
+	return b.String()
 }
 
 type parser struct {
@@ -312,10 +339,11 @@ func NewParser(options ...Option) Parser {
 	return f
 }
 
-// Parse parses a filter string into a Filter.
-func (p *parser) Parse(s string) (Filter, ParseError) {
+var emptyFilter = filter{m: make(map[string][]Condition)}
+
+func (p *parser) Parse(s string) (Filter, error) {
 	if len(s) == 0 {
-		return filter{}, nil
+		return emptyFilter, nil
 	}
 	f, _, err := p.parseConditions(s, 0)
 	if err != nil {
@@ -330,36 +358,39 @@ const (
 	quote           = '"'
 )
 
-func (p *parser) parseConditions(s string, start int) (filter, int, ParseError) {
-	cond, i, err := p.parseCondition(s, start)
+const (
+	separatorAnd = "AND"
+	separatorOr  = "OR"
+)
+
+func (p *parser) parseConditions(s string, start int) (filter, int, error) {
+	f := filter{m: make(map[string][]Condition)}
+	first, i, err := p.parseCondition(s, start)
 	if err != nil {
-		return filter{}, i, err
+		return emptyFilter, i, err
 	}
-	f := filter{make(map[string][]Condition), cond}
-	if i == len(s) {
-		f.m[cond.key] = []Condition{cond}
-		return f, i, nil
-	}
-	prev := cond
+	f.first = &first
+	prev := f.first
 	for i < len(s) {
 		var sep string
 		sep, i, err = parseSeparator(s, i)
 		if err != nil {
-			return filter{}, i, err
+			return emptyFilter, i, err
 		}
+		var cond condition
 		cond, i, err = p.parseCondition(s, i)
 		if err != nil {
-			return filter{}, i, err
+			return emptyFilter, i, err
 		}
-		if sep == "AND" {
+		if sep == separatorAnd {
 			prev.nextAnd = &cond
 		} else {
 			prev.nextOr = &cond
 		}
-		f.m[prev.key] = append(f.m[prev.key], prev)
-		prev = cond
+		f.m[prev.key] = append(f.m[prev.key], *prev)
+		prev = &cond
 	}
-	f.m[prev.key] = append(f.m[prev.key], prev)
+	f.m[prev.key] = append(f.m[prev.key], *prev)
 	return f, start, nil
 }
 
@@ -375,24 +406,24 @@ func spaceOrNonSpace(s string, start int, space bool) int {
 	return i
 }
 
-func parseSeparator(s string, start int) (string, int, ParseError) {
+func parseSeparator(s string, start int) (string, int, error) {
 	i := spaceOrNonSpace(s, start, true)
 	if i == start {
-		return "", i, NewParseError("expected a whitespace", i, s[i:])
+		return "", i, newParseError("expected a whitespace", i, s[i:])
 	}
 	j := spaceOrNonSpace(s, i, false)
 	sep := s[i:j]
-	if !(sep == "AND" || sep == "OR") {
-		return "", i, NewParseError("expected a condition separator (AND, OR)", i, s[i:])
+	if !(sep == separatorAnd || sep == separatorOr) {
+		return "", i, newParseError("expected a condition separator (AND, OR)", i, s[i:])
 	}
 	k := spaceOrNonSpace(s, j, true)
 	if k == j {
-		return "", k, NewParseError("expected a whitespace", k, s[k:])
+		return "", k, newParseError("expected a whitespace", k, s[k:])
 	}
 	return sep, k, nil
 }
 
-func (p *parser) parseCondition(s string, start int) (condition, int, ParseError) {
+func (p *parser) parseCondition(s string, start int) (condition, int, error) {
 	key, keyParts, i, err := p.parseFullName(s, start)
 	if err != nil {
 		return condition{}, i, err
@@ -408,7 +439,7 @@ func (p *parser) parseCondition(s string, start int) (condition, int, ParseError
 	return condition{key, keyParts, op, value, nil, nil}, i, nil
 }
 
-func (p *parser) parseFullName(s string, start int) (string, []string, int, ParseError) {
+func (p *parser) parseFullName(s string, start int) (string, []string, int, error) {
 	parts, i, err := p.parseNameParts(s, start)
 	if err != nil {
 		return "", nil, i, err
@@ -416,7 +447,7 @@ func (p *parser) parseFullName(s string, start int) (string, []string, int, Pars
 	return strings.Join(parts, string(nameSeparator)), parts, i, nil
 }
 
-func (p *parser) parseNameParts(s string, start int) ([]string, int, ParseError) {
+func (p *parser) parseNameParts(s string, start int) ([]string, int, error) {
 	part, i, err := p.parseName(s, start)
 	if err != nil {
 		return nil, i, err
@@ -433,12 +464,12 @@ func (p *parser) parseNameParts(s string, start int) ([]string, int, ParseError)
 	return parts, i, nil
 }
 
-func (p *parser) parseName(s string, start int) (string, int, ParseError) {
+func (p *parser) parseName(s string, start int) (string, int, error) {
 	if len(s) == start {
-		return "", start, NewParseError("unexpected end of string, expected a name", start, s[start:])
+		return "", start, newParseError("unexpected end of string, expected a name", start, s[start:])
 	}
 	if !unicode.IsLetter(rune(s[start])) {
-		return "", start, NewParseError("name must start with letter", start, s[start:])
+		return "", start, newParseError("name must start with letter", start, s[start:])
 	}
 	i := start + 1
 	for ; i < len(s); i += 1 {
@@ -462,7 +493,7 @@ func (p *parser) parseName(s string, start int) (string, int, ParseError) {
 	return s[start:i], i, nil
 }
 
-func (p *parser) parseOperator(s string, start int) (string, int, ParseError) {
+func (p *parser) parseOperator(s string, start int) (string, int, error) {
 	i := start
 	for i < len(s) {
 		i += 1
@@ -470,10 +501,10 @@ func (p *parser) parseOperator(s string, start int) (string, int, ParseError) {
 			return v, i, nil
 		}
 	}
-	return "", i, NewParseError("expected operator", start, s[start:])
+	return "", i, newParseError("expected operator", start, s[start:])
 }
 
-func (p *parser) parseValue(s string, start int) (string, int, ParseError) {
+func (p *parser) parseValue(s string, start int) (string, int, error) {
 	if start == len(s) {
 		return "", start, nil
 	}
@@ -483,19 +514,19 @@ func (p *parser) parseValue(s string, start int) (string, int, ParseError) {
 	return p.parseNormalValue(s, start)
 }
 
-func (p *parser) parseNormalValue(s string, start int) (string, int, ParseError) {
+func (p *parser) parseNormalValue(s string, start int) (string, int, error) {
 	i := spaceOrNonSpace(s, start, false)
 	return s[start:i], i, nil
 }
 
-func (p *parser) parseQuotedValue(s string, start int) (string, int, ParseError) {
+func (p *parser) parseQuotedValue(s string, start int) (string, int, error) {
 	i := start + 1
 	v, i, err := p.parseQuotesEscaped(s, i)
 	if err != nil {
 		return v, i, err
 	}
 	if len(s) == i || s[i] != quote {
-		return "", start, NewParseError("unterminated quoted value", start, s[start:])
+		return "", start, newParseError("unterminated quoted value", start, s[start:])
 	}
 	return v, i + 1, nil
 }
@@ -528,7 +559,7 @@ func (p *parser) parseQuotesEscaped(s string, start int) (string, int, ParseErro
 	return sb.String(), i, nil
 }
 
-// An Option that can be passed to the Parser factory method.
+// An Option that can be passed to the NewParser factory method.
 type Option interface {
 	Apply(parser *parser)
 }

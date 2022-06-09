@@ -138,7 +138,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo*bar"},
 			make(map[string][]Condition),
-			NewParseError("expected operator", 3, "*bar"),
+			newParseError("expected operator", 3, "*bar"),
 		},
 		{
 			"multiple conditions",
@@ -198,7 +198,7 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo=bar AND  AND bla=vla"},
 			nil,
-			NewParseError("expected operator", 16, " bla=vla"),
+			newParseError("expected operator", 16, " bla=vla"),
 		},
 		{
 			"simple single condition",
@@ -250,70 +250,70 @@ func Test_filterParser_Parse(t *testing.T) {
 			standardFields,
 			args{s: "foo"},
 			nil,
-			NewParseError("expected operator", 3, ""),
+			newParseError("expected operator", 3, ""),
 		},
 		{
 			"! name starting with non-letter",
 			standardFields,
 			args{s: "1foo=bar"},
 			nil,
-			NewParseError("name must start with letter", 0, "1foo=bar"),
+			newParseError("name must start with letter", 0, "1foo=bar"),
 		},
 		{
 			"! name with empty path",
 			standardFields,
 			args{s: "foo..bar=bla"},
 			nil,
-			NewParseError("name must start with letter", 4, ".bar=bla"),
+			newParseError("name must start with letter", 4, ".bar=bla"),
 		},
 		{
 			"! name with invalid part",
 			standardFields,
 			args{s: "foo.1.bar=bla"},
 			nil,
-			NewParseError("name must start with letter", 4, "1.bar=bla"),
+			newParseError("name must start with letter", 4, "1.bar=bla"),
 		},
 		{
 			"! name only first (error)",
 			standardFields,
 			args{s: "foo,bar=bla"},
 			nil,
-			NewParseError("expected operator", 3, ",bar=bla"),
+			newParseError("expected operator", 3, ",bar=bla"),
 		},
 		{
 			"! name only second (error)",
 			standardFields,
 			args{s: "foo=bar AND bla"},
 			nil,
-			NewParseError("expected operator", 15, ""),
+			newParseError("expected operator", 15, ""),
 		},
 		{
 			"empty first element",
 			standardFields,
 			args{s: " AND foo=bar"},
 			nil,
-			NewParseError("name must start with letter", 0, " AND foo=bar"),
+			newParseError("name must start with letter", 0, " AND foo=bar"),
 		},
 		{
 			"empty last element",
 			standardFields,
 			args{s: "foo=bar AND "},
 			nil,
-			NewParseError("unexpected end of string, expected a name", 12, ""),
+			newParseError("unexpected end of string, expected a name", 12, ""),
 		},
 		{
 			"empty middle element",
 			standardFields,
 			args{s: "foo=bar AND  AND bla=vla"},
 			nil,
-			NewParseError("expected operator", 16, " bla=vla"),
+			newParseError("expected operator", 16, " bla=vla"),
 		},
 		{
 			"! unterminated quoted value",
 			standardFields,
 			args{s: "foo=\"bar"},
 			nil,
-			NewParseError("unterminated quoted value", 4, "\"bar"),
+			newParseError("unterminated quoted value", 4, "\"bar"),
 		},
 	}
 	for _, tt := range tests {
@@ -349,7 +349,7 @@ func Test_filterParser_Parse(t *testing.T) {
 
 type filterFields struct {
 	m     map[string][]Condition
-	first Condition
+	first *condition
 }
 
 func createCondition(i int) condition {
@@ -369,10 +369,9 @@ func createFields(n int, or ...int) filterFields {
 	if n == 0 {
 		return fs
 	}
-	prev := createCondition(0)
-	if n == 1 {
-		fs.first = prev
-	}
+	first := createCondition(0)
+	fs.first = &first
+	prev := fs.first
 	for i := 1; i < n; i += 1 {
 		c := createCondition(i)
 		if isOr[i] {
@@ -380,11 +379,8 @@ func createFields(n int, or ...int) filterFields {
 		} else {
 			prev.nextAnd = &c
 		}
-		if i == 1 {
-			fs.first = prev
-		}
 		fs.m[prev.key] = []Condition{prev}
-		prev = c
+		prev = &c
 	}
 	fs.m[prev.key] = []Condition{prev}
 	return fs
@@ -431,7 +427,8 @@ func TestFilter_Conditions(t *testing.T) {
 			i := 0
 			for ; i < len(got) && i < len(tt.want); i += 1 {
 				if !conditionsEqual(got[i], tt.want[i]) {
-					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want, got)
+					t.Errorf("\nExpected: %s,\ngot:      %v", tt.want[i], got[i])
+					return
 				}
 			}
 			if i < len(got) {
@@ -458,7 +455,7 @@ func TestCondition_AndOr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := filter{tt.fields.m, tt.fields.first}
 			c := f.First()
-			if c == nil {
+			if c == (*condition)(nil) {
 				if len(tt.want) != 0 {
 					t.Errorf("No first condition in %v", f)
 				}
@@ -488,7 +485,7 @@ func TestCondition_AndOr(t *testing.T) {
 	}
 }
 
-func BenchmarkFilterParser_Parse(b *testing.B) {
+func BenchmarkParser_Parse(b *testing.B) {
 	p := NewParser()
 	type args struct {
 		s string
@@ -750,6 +747,7 @@ func Test_snakeCase(t *testing.T) {
 		{"no extra underscores", args{s: "F__O_O"}, "f__o_o"},
 		{"empty", args{s: ""}, ""},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := snakeCase(tt.args.s); got != tt.want {
@@ -783,7 +781,7 @@ func Test_camelCase(t *testing.T) {
 	}
 }
 
-func FuzzFilterParser_Parse(f *testing.F) {
+func FuzzParser_Parse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data string) {
 		if strings.TrimSpace(data) != data {
 			return
@@ -803,4 +801,37 @@ func FuzzFilterParser_Parse(f *testing.F) {
 			t.Errorf("unexpected error: %v\n%x\n%s", err, []byte(data), data)
 		}
 	})
+}
+
+func ExampleParser_Parse() {
+	p := NewParser()
+	f, _ := p.Parse("foo=bar AND bla=vla")
+	for _, c := range f.Conditions() {
+		fmt.Println(c)
+	}
+	// Output: foo=bar
+	// bla=vla
+}
+
+func Test_filter_String(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"single", "foo=bar", "foo=bar"},
+		{"double", "foo=bar AND bla=vla", "foo=bar AND bla=vla"},
+		{"triple", "foo=bar AND bla=vla OR moo=boo", "foo=bar AND bla=vla OR moo=boo"},
+		{"empty", "", ""},
+		{"trim spaces", "foo=\" bar\"  AND bla=vla", "foo= bar AND bla=vla"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser()
+			f, _ := p.Parse(tt.query)
+			if got := f.String(); got != tt.want {
+				t.Errorf("String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
